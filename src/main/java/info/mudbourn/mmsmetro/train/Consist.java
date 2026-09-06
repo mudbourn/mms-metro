@@ -12,9 +12,11 @@ import net.minecraft.sound.SoundCategory;
 import net.minecraft.sound.SoundEvent;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 // An ordered train of cars sharing one resolved path. The lead advances by
@@ -32,11 +34,15 @@ public final class Consist {
 
     private final List<MetroCarEntity> cars = new ArrayList<>();
 
-    private final RailPath path;
+    private RailPath path;
 
     private final MetroConfig config;
 
-    private final List<PathStation> stations;
+    private List<PathStation> stations;
+
+    private List<info.mudbourn.mmsmetro.path.PathBump> bumps;
+
+    private int nextBumpIndex;
 
     private double headArc;
 
@@ -50,14 +56,38 @@ public final class Consist {
 
     private boolean incomingPlayed;
 
+    // Set when the station currently being dwelt at is a terminus, so the train
+    // turns around on departure instead of continuing.
+    private boolean reverseAfterDwell;
+
     private int rollingTimer;
+
+    // The train's live identity, shown on the onboard HUD. Set from the station
+    // the train most recently served (or the first one ahead at spawn) and
+    // carried until the next arrival changes it.
+    private String currentLine = "";
+
+    private String currentDirection = "";
 
     public Consist(RailPath path, MetroConfig config, double initialHeadArc) {
         this.path = path;
         this.config = config;
         this.headArc = Math.min(initialHeadArc, path.length());
         this.stations = path.stations();
+        this.bumps = path.bumps();
         this.nextStationIndex = firstStationAhead(this.headArc);
+        this.nextBumpIndex = firstBumpAhead(this.headArc);
+        adoptIdentityFromNextStation();
+    }
+
+    // Seeds line/direction from the next station ahead so the HUD reads correctly
+    // before the train has served its first stop.
+    private void adoptIdentityFromNextStation() {
+        PathStation next = nextStation();
+        if (next != null) {
+            this.currentLine = next.line();
+            this.currentDirection = next.direction();
+        }
     }
 
     public void addCar(MetroCarEntity car) {
@@ -105,6 +135,7 @@ public final class Consist {
         }
 
         this.headArc += this.speed;
+        fireCrossedBumps();
 
         boolean stopped = this.headArc >= targetArc || (remaining <= brakingDistance && this.speed <= 1.0e-4);
         if (stopped) {
@@ -112,6 +143,9 @@ public final class Consist {
             this.speed = 0.0;
             if (target != null) {
                 arriveAt(target);
+            } else {
+                // Reached the end of the track with no station ahead: shuttle back.
+                reverse();
             }
             return;
         }
@@ -124,6 +158,16 @@ public final class Consist {
         playFromLead(ModSounds.BUFFER_WAIT, 0.8f);
         this.phase = Phase.DWELLING;
         this.dwellTimer = station.dwellTicks();
+        this.reverseAfterDwell = station.terminus();
+        // Serving this stop makes the train take on its line and direction.
+        if (!station.line().isEmpty()) {
+            this.currentLine = station.line();
+        }
+        if (!station.direction().isEmpty()) {
+            this.currentDirection = station.direction();
+        }
+        // Reaching the stop clears any pending "arriving" announcement.
+        setAnnouncement("");
     }
 
     private void tickDwell() {
@@ -134,8 +178,14 @@ public final class Consist {
 
         playFromLead(ModSounds.DEPARTURE, 1.0f);
         this.incomingPlayed = false;
-        this.nextStationIndex++;
         this.phase = Phase.RUNNING;
+        if (this.reverseAfterDwell) {
+            // The station commanded a turn-around: rebuild the path the other way.
+            this.reverseAfterDwell = false;
+            reverse();
+        } else {
+            this.nextStationIndex++;
+        }
     }
 
     private void tickRolling() {
@@ -151,6 +201,9 @@ public final class Consist {
     }
 
     private void applyCarPositions() {
+        PathStation next = nextStation();
+        String nextName = next != null ? next.name() : "";
+        boolean waiting = this.phase == Phase.DWELLING;
         for (int i = 0; i < this.cars.size(); i++) {
             double arc = Math.max(0.0, this.headArc - i * this.config.carSpacing);
             PathPoint point = this.path.sample(arc);
@@ -162,7 +215,110 @@ public final class Consist {
             car.setPathPitch(point.pitch());
             car.setVelocity(Vec3d.ZERO);
             car.setArcLength((float) arc);
+            car.setHudInfo(this.currentLine, this.currentDirection, nextName, waiting);
         }
+    }
+
+    // Pushes an announcement string onto every car so all riders see it at once.
+    private void setAnnouncement(String text) {
+        for (MetroCarEntity car : this.cars) {
+            car.setHudAnnouncement(text);
+        }
+    }
+
+    // Fires the arrival announcement for every bump the head has just passed.
+    private void fireCrossedBumps() {
+        while (this.nextBumpIndex < this.bumps.size()
+                && this.headArc >= this.bumps.get(this.nextBumpIndex).arc()) {
+            setAnnouncement(buildAnnouncement(this.bumps.get(this.nextBumpIndex)));
+            this.nextBumpIndex++;
+        }
+    }
+
+    // The arrival line a bump announces, e.g.
+    //   "Arriving at: Central, exit will be on the left. Transfer for Blue Line."
+    //   "Arriving at: Depot, this is a terminal station. Exit on the right."
+    private static String buildAnnouncement(info.mudbourn.mmsmetro.path.PathBump bump) {
+        String name = bump.stationName().isEmpty() ? "the next station" : bump.stationName();
+        String exit = bump.exitDirection();
+        StringBuilder sb = new StringBuilder("Arriving at: ").append(name);
+        if (bump.terminal()) {
+            sb.append(", this is a terminal station.");
+            if (!exit.isEmpty()) {
+                sb.append(" Exit on the ").append(exit).append('.');
+            }
+        } else if (!exit.isEmpty()) {
+            sb.append(", exit will be on the ").append(exit).append('.');
+        } else {
+            sb.append('.');
+        }
+        if (bump.hub() && !bump.transferLine().isEmpty()) {
+            sb.append(" Transfer for ").append(bump.transferLine()).append('.');
+        }
+        return sb.toString();
+    }
+
+    private int firstBumpAhead(double arc) {
+        for (int i = 0; i < this.bumps.size(); i++) {
+            if (this.bumps.get(i).arc() > arc + 1.0e-3) {
+                return i;
+            }
+        }
+        return this.bumps.size();
+    }
+
+    // Turns the train around: rebuild the path from the current lead's rail
+    // heading back the way it came, flip the car order so the old tail leads,
+    // and re-seat every car onto the new path. Used at terminus stations and
+    // at dead ends so a train shuttles instead of parking forever.
+    private void reverse() {
+        ServerWorld world = leadWorld();
+        if (world == null || this.cars.isEmpty()) {
+            this.speed = 0.0;
+            return;
+        }
+
+        MetroCarEntity oldLead = this.cars.get(0);
+        Direction newDir = horizontalFromYaw(oldLead.getPathYaw()).getOpposite();
+        BlockPos startRail = ConsistManager.findRail(world,
+            BlockPos.ofFloored(oldLead.getX(), oldLead.getY(), oldLead.getZ()));
+        if (startRail == null) {
+            this.speed = 0.0;
+            return;
+        }
+
+        RailPath newPath = RailPath.build(world, startRail, newDir, RailPath.MAX_NODES);
+        if (newPath.length() <= 0.0) {
+            this.speed = 0.0;
+            return;
+        }
+
+        Collections.reverse(this.cars);
+        for (int i = 0; i < this.cars.size(); i++) {
+            this.cars.get(i).setCarIndex(i);
+        }
+
+        this.path = newPath;
+        this.stations = newPath.stations();
+        this.bumps = newPath.bumps();
+        this.headArc = Math.min((this.cars.size() - 1) * this.config.carSpacing, newPath.length());
+        this.speed = 0.0;
+        this.phase = Phase.RUNNING;
+        this.incomingPlayed = false;
+        this.nextStationIndex = firstStationAhead(this.headArc);
+        this.nextBumpIndex = firstBumpAhead(this.headArc);
+        adoptIdentityFromNextStation();
+        applyCarPositions();
+    }
+
+    // Nearest cardinal direction for a Minecraft yaw (0=south, 90=west, ...).
+    private static Direction horizontalFromYaw(float yaw) {
+        return switch (Math.floorMod(Math.round(yaw / 90.0f), 4)) {
+            case 0 -> Direction.SOUTH;
+            case 1 -> Direction.WEST;
+            case 2 -> Direction.NORTH;
+            default -> Direction.EAST;
+        };
     }
 
     private int firstStationAhead(double arc) {

@@ -24,8 +24,6 @@ import java.util.Map;
 // Owns the live consists per world, ticks them, and spawns or removes trains.
 public final class ConsistManager {
 
-    private static final int MAX_PATH_NODES = 512;
-
     private static final Map<ServerWorld, List<Consist>> BY_WORLD = new HashMap<>();
 
     public static void init() {
@@ -44,7 +42,10 @@ public final class ConsistManager {
         }
 
         if (world instanceof ServerWorld serverWorld) {
-            removeConsist(serverWorld, car.getConsistId());
+            int cars = removeConsist(serverWorld, car.getConsistId());
+            int trains = cars > 0 ? 1 : 0;
+            player.sendMessage(net.minecraft.text.Text.literal(
+                "Removed " + trains + " train(s) (" + cars + " car(s))."), true);
         }
         return ActionResult.SUCCESS;
     }
@@ -80,7 +81,14 @@ public final class ConsistManager {
     }
 
     public static Consist spawn(ServerWorld world, BlockPos rail, Direction facing, int cars, MetroConfig config) {
-        RailPath path = RailPath.build(world, rail, facing, MAX_PATH_NODES);
+        // Head toward whichever direction reaches a station soonest; if neither
+        // side has one, fall back to the way the player was facing.
+        RailPath forward = RailPath.build(world, rail, facing, RailPath.MAX_NODES);
+        RailPath backward = RailPath.build(world, rail, facing.getOpposite(), RailPath.MAX_NODES);
+        RailPath path = backward.nearestStationArc() < forward.nearestStationArc() ? backward : forward;
+        if (path.length() <= 0.0) {
+            path = forward.length() > 0.0 ? forward : backward;
+        }
         if (path.length() <= 0.0) {
             return null;
         }

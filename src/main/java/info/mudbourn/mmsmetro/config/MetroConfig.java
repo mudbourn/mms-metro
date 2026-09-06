@@ -36,6 +36,45 @@ public final class MetroConfig {
     // Radius in chunks the consist force-loads around itself.
     public int chunkRadius = 2;
 
+    // Every settable key, for command autocomplete and validation.
+    public static final java.util.List<String> KEYS = java.util.List.of(
+        "maxSpeed", "acceleration", "carSpacing", "carsPerTrain",
+        "dwellTicks", "headway", "chunkRadius");
+
+    // Applies a value to a named field, returning false for an unknown key or an
+    // unparseable value. Saves on success so the change survives a restart.
+    public boolean set(String key, String value) {
+        try {
+            switch (key) {
+                case "maxSpeed" -> this.maxSpeed = Double.parseDouble(value);
+                case "acceleration" -> this.acceleration = Double.parseDouble(value);
+                case "carSpacing" -> this.carSpacing = Double.parseDouble(value);
+                case "carsPerTrain" -> this.carsPerTrain = Integer.parseInt(value);
+                case "dwellTicks" -> this.dwellTicks = Integer.parseInt(value);
+                case "headway" -> this.headway = Double.parseDouble(value);
+                case "chunkRadius" -> this.chunkRadius = Integer.parseInt(value);
+                default -> {
+                    return false;
+                }
+            }
+        } catch (NumberFormatException e) {
+            return false;
+        }
+        save();
+        return true;
+    }
+
+    // A single-line dump of every field, for the config command with no value.
+    public String describe() {
+        return "maxSpeed=" + maxSpeed
+            + ", acceleration=" + acceleration
+            + ", carSpacing=" + carSpacing
+            + ", carsPerTrain=" + carsPerTrain
+            + ", dwellTicks=" + dwellTicks
+            + ", headway=" + headway
+            + ", chunkRadius=" + chunkRadius;
+    }
+
     public static MetroConfig load() {
         Path path = configPath();
         if (!Files.exists(path)) {

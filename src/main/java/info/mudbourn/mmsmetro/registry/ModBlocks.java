@@ -3,6 +3,7 @@ package info.mudbourn.mmsmetro.registry;
 import info.mudbourn.mmsmetro.MmsMetro;
 import info.mudbourn.mmsmetro.block.MetroModelBlock;
 import info.mudbourn.mmsmetro.block.SpeakerBlock;
+import info.mudbourn.mmsmetro.block.SpeedBumpBlock;
 import info.mudbourn.mmsmetro.block.StationBlock;
 import net.minecraft.block.AbstractBlock;
 import net.minecraft.block.Block;
@@ -25,6 +26,8 @@ public final class ModBlocks {
 
     public static Block SPEAKER;
 
+    public static Block SPEED_BUMP;
+
     public static void register() {
         STATION = register("station_block", StationBlock::new,
             AbstractBlock.Settings.copy(Blocks.IRON_BLOCK));
@@ -32,6 +35,8 @@ public final class ModBlocks {
             AbstractBlock.Settings.copy(Blocks.SMOOTH_STONE));
         SPEAKER = register("speaker_block", SpeakerBlock::new,
             AbstractBlock.Settings.copy(Blocks.NOTE_BLOCK));
+        SPEED_BUMP = register("speed_bump", SpeedBumpBlock::new,
+            AbstractBlock.Settings.copy(Blocks.STONE_PRESSURE_PLATE));
     }
 
     private static Block register(String name, Function<AbstractBlock.Settings, Block> factory,

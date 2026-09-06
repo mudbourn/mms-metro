@@ -1,5 +1,6 @@
 package info.mudbourn.mmsmetro.path;
 
+import info.mudbourn.mmsmetro.block.SpeedBumpBlock;
 import info.mudbourn.mmsmetro.block.StationBlock;
 import info.mudbourn.mmsmetro.block.entity.StationBlockEntity;
 import net.minecraft.block.AbstractRailBlock;
@@ -18,6 +19,9 @@ import java.util.List;
 // sampling. Cars are positioned by distance along this path, never by guessing.
 public final class RailPath {
 
+    // Default cap on how far a path is walked from its origin, in rail nodes.
+    public static final int MAX_NODES = 512;
+
     private final List<Vec3d> points;
 
     private final double[] cumulative;
@@ -26,7 +30,9 @@ public final class RailPath {
 
     private final List<PathStation> stations;
 
-    private RailPath(List<Vec3d> points, List<StationMark> marks) {
+    private final List<PathBump> bumps;
+
+    private RailPath(List<Vec3d> points, List<StationMark> marks, List<BumpMark> bumpMarks) {
         this.points = points;
         this.cumulative = new double[points.size()];
         for (int i = 1; i < points.size(); i++) {
@@ -38,9 +44,39 @@ public final class RailPath {
         for (StationMark mark : marks) {
             if (mark.nodeIndex < this.cumulative.length) {
                 this.stations.add(new PathStation(
-                    this.cumulative[mark.nodeIndex], mark.dwellTicks, mark.pos));
+                    this.cumulative[mark.nodeIndex], mark.dwellTicks, mark.pos, mark.terminus,
+                    mark.name, mark.line, mark.direction, mark.nextStation,
+                    mark.exitDirection, mark.hub, mark.transferLine));
             }
         }
+
+        // Resolve each bump against the first station ahead of it: the bump only
+        // announces if there is a station further along to arrive at.
+        this.bumps = new ArrayList<>();
+        for (BumpMark bump : bumpMarks) {
+            if (bump.nodeIndex >= this.cumulative.length) {
+                continue;
+            }
+            double arc = this.cumulative[bump.nodeIndex];
+            PathStation ahead = null;
+            for (PathStation station : this.stations) {
+                if (station.arc() > arc + 1.0e-3) {
+                    ahead = station;
+                    break;
+                }
+            }
+            if (ahead == null) {
+                continue;
+            }
+            this.bumps.add(new PathBump(arc, ahead.name(), ahead.exitDirection(),
+                ahead.hub(), ahead.transferLine(), bump.terminus || ahead.terminus()));
+        }
+    }
+
+    // Arc-length distance to the first station on this path, or +infinity if the
+    // path reaches no station. Used to steer a train toward the nearer station.
+    public double nearestStationArc() {
+        return this.stations.isEmpty() ? Double.POSITIVE_INFINITY : this.stations.get(0).arc();
     }
 
     public double length() {
@@ -52,8 +88,19 @@ public final class RailPath {
         return this.stations;
     }
 
+    // Announcement triggers along this path, ordered from the head of the path.
+    public List<PathBump> bumps() {
+        return this.bumps;
+    }
+
     // A station found at a node, before arc-lengths are known.
-    private record StationMark(int nodeIndex, int dwellTicks, BlockPos pos) {
+    private record StationMark(int nodeIndex, int dwellTicks, BlockPos pos, boolean terminus,
+                              String name, String line, String direction, String nextStation,
+                              String exitDirection, boolean hub, String transferLine) {
+    }
+
+    // A speed bump found at a node, before arc-lengths are known.
+    private record BumpMark(int nodeIndex, boolean terminus) {
     }
 
     public PathPoint sample(double s) {
@@ -125,13 +172,17 @@ public final class RailPath {
     public static RailPath build(World world, BlockPos start, Direction initialDir, int maxNodes) {
         List<Vec3d> points = new ArrayList<>();
         List<StationMark> marks = new ArrayList<>();
+        List<BumpMark> bumpMarks = new ArrayList<>();
+        java.util.Set<BlockPos> claimed = new java.util.HashSet<>();
+        java.util.Set<BlockPos> claimedBumps = new java.util.HashSet<>();
         RailShape startShape = railShape(world, start);
         if (startShape == null) {
-            return new RailPath(points, marks);
+            return new RailPath(points, marks, bumpMarks);
         }
 
         points.add(centerPoint(start, startShape));
-        addStationMark(world, start, points.size() - 1, marks);
+        addStationMark(world, start, points.size() - 1, marks, claimed);
+        addBumpMark(world, start, points.size() - 1, bumpMarks, claimedBumps);
         Direction travel = pickExit(startShape, initialDir);
         BlockPos current = start;
         RailShape currentShape = startShape;
@@ -148,7 +199,8 @@ public final class RailPath {
             }
 
             points.add(centerPoint(next, nextShape));
-            addStationMark(world, next, points.size() - 1, marks);
+            addStationMark(world, next, points.size() - 1, marks, claimed);
+            addBumpMark(world, next, points.size() - 1, bumpMarks, claimedBumps);
             Direction entered = travel.getOpposite();
             Direction[] conns = connections(nextShape);
             Direction exit = conns[0] == entered ? conns[1] : (conns[1] == entered ? conns[0] : null);
@@ -161,25 +213,91 @@ public final class RailPath {
             travel = exit;
         }
 
-        return new RailPath(points, marks);
+        return new RailPath(points, marks, bumpMarks);
     }
 
-    // Records a station stop if a StationBlock sits directly above this rail
-    // node (matching the spawner's rail-below-marker placement convention).
-    private static void addStationMark(World world, BlockPos rail, int nodeIndex, List<StationMark> marks) {
-        for (BlockPos pos : new BlockPos[]{rail.up(), rail.up(2)}) {
-            BlockState state = world.getBlockState(pos);
-            if (!(state.getBlock() instanceof StationBlock)) {
+    // How far a station block may sit from a rail node and still count: one
+    // block out horizontally (a platform marker beside the track) and up to two
+    // blocks up. The nearest node claims each block so it is only marked once.
+    private static final int STATION_H_RADIUS = 1;
+    private static final int STATION_UP = 2;
+
+    // Records a station stop for the nearest StationBlock around this rail node.
+    private static void addStationMark(World world, BlockPos rail, int nodeIndex,
+                                       List<StationMark> marks, java.util.Set<BlockPos> claimed) {
+        int r = STATION_H_RADIUS;
+        BlockPos best = null;
+        double bestSq = Double.MAX_VALUE;
+        for (BlockPos pos : BlockPos.iterate(
+                rail.add(-r, 0, -r), rail.add(r, STATION_UP, r))) {
+            if (claimed.contains(pos.toImmutable())
+                || !(world.getBlockState(pos).getBlock() instanceof StationBlock)) {
                 continue;
             }
-            int dwell = 100;
-            BlockEntity be = world.getBlockEntity(pos);
-            if (be instanceof StationBlockEntity station) {
-                dwell = station.getDwellTicks();
+            double sq = pos.getSquaredDistance(rail);
+            if (sq < bestSq) {
+                bestSq = sq;
+                best = pos.toImmutable();
             }
-            marks.add(new StationMark(nodeIndex, dwell, pos));
+        }
+
+        if (best == null) {
             return;
         }
+
+        claimed.add(best);
+        int dwell = 100;
+        boolean terminus = false;
+        String name = "";
+        String line = "";
+        String direction = "";
+        String nextStation = "";
+        String exitDirection = "";
+        boolean hub = false;
+        String transferLine = "";
+        BlockEntity be = world.getBlockEntity(best);
+        if (be instanceof StationBlockEntity station) {
+            dwell = station.getDwellTicks();
+            terminus = station.isTerminus();
+            name = station.getStationName();
+            line = station.getLineName();
+            direction = station.getLineDirection();
+            nextStation = station.getNextStation();
+            exitDirection = station.getExitDirection();
+            hub = station.isHub();
+            transferLine = station.getTransferLine();
+        }
+        marks.add(new StationMark(nodeIndex, dwell, best, terminus,
+            name, line, direction, nextStation, exitDirection, hub, transferLine));
+    }
+
+    // Records a speed bump found around this rail node, using the same
+    // neighborhood scan as stations so a bump may sit beside or under the track.
+    private static void addBumpMark(World world, BlockPos rail, int nodeIndex,
+                                    List<BumpMark> marks, java.util.Set<BlockPos> claimed) {
+        int r = STATION_H_RADIUS;
+        BlockPos best = null;
+        double bestSq = Double.MAX_VALUE;
+        for (BlockPos pos : BlockPos.iterate(
+                rail.add(-r, -1, -r), rail.add(r, STATION_UP, r))) {
+            if (claimed.contains(pos.toImmutable())
+                || !(world.getBlockState(pos).getBlock() instanceof SpeedBumpBlock)) {
+                continue;
+            }
+            double sq = pos.getSquaredDistance(rail);
+            if (sq < bestSq) {
+                bestSq = sq;
+                best = pos.toImmutable();
+            }
+        }
+
+        if (best == null) {
+            return;
+        }
+
+        claimed.add(best);
+        boolean terminus = world.getBlockState(best).get(SpeedBumpBlock.TERMINUS);
+        marks.add(new BumpMark(nodeIndex, terminus));
     }
 
     private static RailShape railShape(World world, BlockPos pos) {

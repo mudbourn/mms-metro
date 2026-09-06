@@ -2,12 +2,13 @@
   "mms_metro.name": "MMS Metro",
   "itemGroup.mms_metro.metro": "MMS Metro",
   "block.mms_metro.station_block": "Station",
-  "block.mms_metro.metro_model_block": "Metro Model Block",
+  "block.mms_metro.metro_model_block": "Metro Car Model",
   "block.mms_metro.speaker_block": "Station Speaker",
+  "block.mms_metro.speed_bump": "Speed Bump",
   "subtitles.mms_metro.train_incoming": "Train approaching",
   "subtitles.mms_metro.arrival": "Train arriving",
   "subtitles.mms_metro.buffer_wait": "Train waiting",
   "subtitles.mms_metro.departure": "Train departing",
-  "item.mms_metro.metro_spawner": "Metro Spawner",
+  "item.mms_metro.metro_spawner": "Train Spawner",
   "entity.mms_metro.metro_car": "Metro Car"
 }
