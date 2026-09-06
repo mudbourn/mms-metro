@@ -1,3 +1,6 @@
+.gradle/
+build/
+run/
 data/*
 !data/ms_settings_default.json
 backups/
