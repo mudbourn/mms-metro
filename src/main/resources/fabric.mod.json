@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "mms_metro",
+  "version": "${version}",
+  "name": "MMS Metro",
+  "description": "A reliable metro and train system for MMS.",
+  "authors": [
+    "mudbourn"
+  ],
+  "contact": {
+    "sources": "https://github.com/mudbourn/mms-metro"
+  },
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "info.mudbourn.mmsmetro.MmsMetro"
+    ],
+    "client": [
+      "info.mudbourn.mmsmetro.client.MmsMetroClient"
+    ]
+  },
+  "mixins": [
+    "mms_metro.mixins.json",
+    {
+      "config": "mms_metro.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
