@@ -24,23 +24,36 @@ public final class RailPath {
 
     private final List<Vec3d> points;
 
+    // The rail block each node sits on, in path order — kept so the station and
+    // bump markers can be re-scanned against the world without rebuilding the
+    // geometry, which is what makes live station placement work.
+    private final List<BlockPos> nodes;
+
     private final double[] cumulative;
 
     private final double length;
 
-    private final List<PathStation> stations;
+    // Mutable: refreshed in place by refreshMarkers so arc positions stay fixed.
+    private final List<PathStation> stations = new ArrayList<>();
 
-    private final List<PathBump> bumps;
+    private final List<PathBump> bumps = new ArrayList<>();
 
-    private RailPath(List<Vec3d> points, List<StationMark> marks, List<BumpMark> bumpMarks) {
+    private RailPath(List<Vec3d> points, List<BlockPos> nodes,
+                    List<StationMark> marks, List<BumpMark> bumpMarks) {
         this.points = points;
+        this.nodes = nodes;
         this.cumulative = new double[points.size()];
         for (int i = 1; i < points.size(); i++) {
             this.cumulative[i] = this.cumulative[i - 1] + points.get(i - 1).distanceTo(points.get(i));
         }
         this.length = points.size() < 2 ? 0.0 : this.cumulative[points.size() - 1];
+        resolveMarks(marks, bumpMarks);
+    }
 
-        this.stations = new ArrayList<>();
+    // Rebuilds the station and bump lists from raw marks. Arc positions come from
+    // the fixed cumulative table, so re-running this never shifts the geometry.
+    private void resolveMarks(List<StationMark> marks, List<BumpMark> bumpMarks) {
+        this.stations.clear();
         for (StationMark mark : marks) {
             if (mark.nodeIndex < this.cumulative.length) {
                 this.stations.add(new PathStation(
@@ -52,7 +65,7 @@ public final class RailPath {
 
         // Resolve each bump against the first station ahead of it: the bump only
         // announces if there is a station further along to arrive at.
-        this.bumps = new ArrayList<>();
+        this.bumps.clear();
         for (BumpMark bump : bumpMarks) {
             if (bump.nodeIndex >= this.cumulative.length) {
                 continue;
@@ -71,6 +84,21 @@ public final class RailPath {
             this.bumps.add(new PathBump(arc, ahead.pos(), ahead.name(), ahead.exitDirection(),
                 ahead.hub(), ahead.transferLine(), bump.terminus || ahead.terminus()));
         }
+    }
+
+    // Re-scans every node for station and bump blocks and rebuilds the marker
+    // lists, so stations placed (or removed) after the path was built register
+    // without respawning the train. Geometry and arc positions are unchanged.
+    public void refreshMarkers(World world) {
+        List<StationMark> marks = new ArrayList<>();
+        List<BumpMark> bumpMarks = new ArrayList<>();
+        java.util.Set<BlockPos> claimed = new java.util.HashSet<>();
+        java.util.Set<BlockPos> claimedBumps = new java.util.HashSet<>();
+        for (int i = 0; i < this.nodes.size(); i++) {
+            addStationMark(world, this.nodes.get(i), i, marks, claimed);
+            addBumpMark(world, this.nodes.get(i), i, bumpMarks, claimedBumps);
+        }
+        resolveMarks(marks, bumpMarks);
     }
 
     // Arc-length distance to the first station on this path, or +infinity if the
@@ -171,16 +199,18 @@ public final class RailPath {
 
     public static RailPath build(World world, BlockPos start, Direction initialDir, int maxNodes) {
         List<Vec3d> points = new ArrayList<>();
+        List<BlockPos> nodes = new ArrayList<>();
         List<StationMark> marks = new ArrayList<>();
         List<BumpMark> bumpMarks = new ArrayList<>();
         java.util.Set<BlockPos> claimed = new java.util.HashSet<>();
         java.util.Set<BlockPos> claimedBumps = new java.util.HashSet<>();
         RailShape startShape = railShape(world, start);
         if (startShape == null) {
-            return new RailPath(points, marks, bumpMarks);
+            return new RailPath(points, nodes, marks, bumpMarks);
         }
 
         points.add(centerPoint(start, startShape));
+        nodes.add(start.toImmutable());
         addStationMark(world, start, points.size() - 1, marks, claimed);
         addBumpMark(world, start, points.size() - 1, bumpMarks, claimedBumps);
         Direction travel = pickExit(startShape, initialDir);
@@ -199,6 +229,7 @@ public final class RailPath {
             }
 
             points.add(centerPoint(next, nextShape));
+            nodes.add(next.toImmutable());
             addStationMark(world, next, points.size() - 1, marks, claimed);
             addBumpMark(world, next, points.size() - 1, bumpMarks, claimedBumps);
             Direction entered = travel.getOpposite();
@@ -213,7 +244,7 @@ public final class RailPath {
             travel = exit;
         }
 
-        return new RailPath(points, marks, bumpMarks);
+        return new RailPath(points, nodes, marks, bumpMarks);
     }
 
     // How far a station block may sit from a rail node and still count: one

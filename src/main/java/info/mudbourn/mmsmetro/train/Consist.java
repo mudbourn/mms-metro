@@ -7,6 +7,7 @@ import info.mudbourn.mmsmetro.path.PathPoint;
 import info.mudbourn.mmsmetro.path.PathStation;
 import info.mudbourn.mmsmetro.path.RailPath;
 import info.mudbourn.mmsmetro.registry.ModSounds;
+import net.minecraft.entity.Entity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.sound.SoundCategory;
 import net.minecraft.sound.SoundEvent;
@@ -57,6 +58,12 @@ public final class Consist {
 
     private int rollingTimer;
 
+    // How often the path re-scans the world for stations and bumps, in ticks, so
+    // markers placed after spawn register without a respawn.
+    private static final int MARKER_REFRESH_INTERVAL = 20;
+
+    private int markerRefreshTimer;
+
     // The train's live identity, shown on the onboard HUD. Set from the station
     // the train most recently served (or the first one ahead at spawn) and
     // carried until the next arrival changes it.
@@ -105,10 +112,33 @@ public final class Consist {
         if (this.phase == Phase.DWELLING) {
             tickDwell();
         } else {
+            if (--this.markerRefreshTimer <= 0) {
+                this.markerRefreshTimer = MARKER_REFRESH_INTERVAL;
+                refreshMarkers();
+            }
             tickRunning();
         }
 
         applyCarPositions();
+    }
+
+    // Re-scans the track for stations and bumps and re-derives which lie ahead,
+    // so markers placed while the train is running take effect on the next pass.
+    // Only runs while moving; during a dwell the indices must not be disturbed.
+    private void refreshMarkers() {
+        ServerWorld world = leadWorld();
+        if (world == null) {
+            return;
+        }
+        this.path.refreshMarkers(world);
+        this.stations = this.path.stations();
+        this.bumps = this.path.bumps();
+        this.nextStationIndex = firstStationAhead(this.headArc);
+        this.nextBumpIndex = firstBumpAhead(this.headArc);
+        // Adopt an upcoming line only if the train has not yet served a stop.
+        if (this.currentLine.isEmpty()) {
+            adoptIdentityFromNextStation();
+        }
     }
 
     private void tickRunning() {
@@ -209,6 +239,11 @@ public final class Consist {
             car.setVelocity(point.pos().subtract(previous));
             car.setArcLength((float) arc);
             car.setHudInfo(this.currentLine, this.currentDirection, nextName, waiting);
+            // Re-seat riders onto the car's new position this same tick, so they
+            // are never left a tick behind by the order entities happen to tick.
+            for (Entity passenger : car.getPassengerList()) {
+                car.updatePassengerPosition(passenger);
+            }
         }
     }
 
