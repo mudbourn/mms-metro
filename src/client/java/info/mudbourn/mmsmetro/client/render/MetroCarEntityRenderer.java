@@ -36,8 +36,8 @@ public class MetroCarEntityRenderer extends EntityRenderer<MetroCarEntity, Metro
     @Override
     public void updateRenderState(MetroCarEntity entity, State state, float tickDelta) {
         super.updateRenderState(entity, state, tickDelta);
-        state.lerpedYaw = entity.getYaw(tickDelta);
-        state.lerpedPitch = entity.getPitch(tickDelta);
+        state.lerpedYaw = entity.getLerpedPathYaw(tickDelta);
+        state.lerpedPitch = entity.getLerpedPathPitch(tickDelta);
     }
 
     @Override

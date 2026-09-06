@@ -1,0 +1,26 @@
+{
+  "train_incoming": {
+    "category": "neutral",
+    "sounds": [
+      "mms_metro:train_incoming"
+    ]
+  },
+  "arrival": {
+    "category": "neutral",
+    "sounds": [
+      "mms_metro:arrival"
+    ]
+  },
+  "buffer_wait": {
+    "category": "neutral",
+    "sounds": [
+      "mms_metro:buffer_wait"
+    ]
+  },
+  "departure": {
+    "category": "neutral",
+    "sounds": [
+      "mms_metro:departure"
+    ]
+  }
+}

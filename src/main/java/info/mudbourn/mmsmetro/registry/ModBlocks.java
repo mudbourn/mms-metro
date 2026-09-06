@@ -2,6 +2,7 @@ package info.mudbourn.mmsmetro.registry;
 
 import info.mudbourn.mmsmetro.MmsMetro;
 import info.mudbourn.mmsmetro.block.MetroModelBlock;
+import info.mudbourn.mmsmetro.block.SpeakerBlock;
 import info.mudbourn.mmsmetro.block.StationBlock;
 import net.minecraft.block.AbstractBlock;
 import net.minecraft.block.Block;
@@ -22,11 +23,15 @@ public final class ModBlocks {
 
     public static Block METRO_MODEL;
 
+    public static Block SPEAKER;
+
     public static void register() {
         STATION = register("station_block", StationBlock::new,
             AbstractBlock.Settings.copy(Blocks.IRON_BLOCK));
         METRO_MODEL = register("metro_model_block", MetroModelBlock::new,
             AbstractBlock.Settings.copy(Blocks.SMOOTH_STONE));
+        SPEAKER = register("speaker_block", SpeakerBlock::new,
+            AbstractBlock.Settings.copy(Blocks.NOTE_BLOCK));
     }
 
     private static Block register(String name, Function<AbstractBlock.Settings, Block> factory,

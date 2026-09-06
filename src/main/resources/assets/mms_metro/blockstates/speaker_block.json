@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "mms_metro:block/speaker_block"
+    }
+  }
+}

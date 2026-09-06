@@ -1,7 +1,10 @@
 package info.mudbourn.mmsmetro.path;
 
+import info.mudbourn.mmsmetro.block.StationBlock;
+import info.mudbourn.mmsmetro.block.entity.StationBlockEntity;
 import net.minecraft.block.AbstractRailBlock;
 import net.minecraft.block.BlockState;
+import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.block.enums.RailShape;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
@@ -21,17 +24,36 @@ public final class RailPath {
 
     private final double length;
 
-    private RailPath(List<Vec3d> points) {
+    private final List<PathStation> stations;
+
+    private RailPath(List<Vec3d> points, List<StationMark> marks) {
         this.points = points;
         this.cumulative = new double[points.size()];
         for (int i = 1; i < points.size(); i++) {
             this.cumulative[i] = this.cumulative[i - 1] + points.get(i - 1).distanceTo(points.get(i));
         }
         this.length = points.size() < 2 ? 0.0 : this.cumulative[points.size() - 1];
+
+        this.stations = new ArrayList<>();
+        for (StationMark mark : marks) {
+            if (mark.nodeIndex < this.cumulative.length) {
+                this.stations.add(new PathStation(
+                    this.cumulative[mark.nodeIndex], mark.dwellTicks, mark.pos));
+            }
+        }
     }
 
     public double length() {
         return this.length;
+    }
+
+    // Station stops along this path, ordered from the head of the path.
+    public List<PathStation> stations() {
+        return this.stations;
+    }
+
+    // A station found at a node, before arc-lengths are known.
+    private record StationMark(int nodeIndex, int dwellTicks, BlockPos pos) {
     }
 
     public PathPoint sample(double s) {
@@ -61,12 +83,14 @@ public final class RailPath {
 
     public static RailPath build(World world, BlockPos start, Direction initialDir, int maxNodes) {
         List<Vec3d> points = new ArrayList<>();
+        List<StationMark> marks = new ArrayList<>();
         RailShape startShape = railShape(world, start);
         if (startShape == null) {
-            return new RailPath(points);
+            return new RailPath(points, marks);
         }
 
         points.add(centerPoint(start, startShape));
+        addStationMark(world, start, points.size() - 1, marks);
         Direction travel = pickExit(startShape, initialDir);
         BlockPos current = start;
         RailShape currentShape = startShape;
@@ -83,6 +107,7 @@ public final class RailPath {
             }
 
             points.add(centerPoint(next, nextShape));
+            addStationMark(world, next, points.size() - 1, marks);
             Direction entered = travel.getOpposite();
             Direction[] conns = connections(nextShape);
             Direction exit = conns[0] == entered ? conns[1] : (conns[1] == entered ? conns[0] : null);
@@ -95,7 +120,25 @@ public final class RailPath {
             travel = exit;
         }
 
-        return new RailPath(points);
+        return new RailPath(points, marks);
+    }
+
+    // Records a station stop if a StationBlock sits directly above this rail
+    // node (matching the spawner's rail-below-marker placement convention).
+    private static void addStationMark(World world, BlockPos rail, int nodeIndex, List<StationMark> marks) {
+        for (BlockPos pos : new BlockPos[]{rail.up(), rail.up(2)}) {
+            BlockState state = world.getBlockState(pos);
+            if (!(state.getBlock() instanceof StationBlock)) {
+                continue;
+            }
+            int dwell = 100;
+            BlockEntity be = world.getBlockEntity(pos);
+            if (be instanceof StationBlockEntity station) {
+                dwell = station.getDwellTicks();
+            }
+            marks.add(new StationMark(nodeIndex, dwell, pos));
+            return;
+        }
     }
 
     private static RailShape railShape(World world, BlockPos pos) {
