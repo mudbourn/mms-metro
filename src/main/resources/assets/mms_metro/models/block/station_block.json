@@ -1,6 +1,8 @@
 {
-  "parent": "minecraft:block/cube_all",
+  "parent": "minecraft:block/cube_bottom_top",
   "textures": {
-    "all": "minecraft:block/light_blue_concrete"
+    "top": "mms_metro:block/station_block",
+    "side": "mms_metro:block/metro_body",
+    "bottom": "mms_metro:block/metro_body"
   }
 }

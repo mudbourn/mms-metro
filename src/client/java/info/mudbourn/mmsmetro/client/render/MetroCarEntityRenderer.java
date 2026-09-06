@@ -1,5 +1,6 @@
 package info.mudbourn.mmsmetro.client.render;
 
+import info.mudbourn.mmsmetro.MmsMetro;
 import info.mudbourn.mmsmetro.entity.MetroCarEntity;
 import net.minecraft.client.render.OverlayTexture;
 import net.minecraft.client.render.command.OrderedRenderCommandQueue;
@@ -16,7 +17,7 @@ import net.minecraft.util.math.RotationAxis;
 // Draws a metro car with the vanilla minecart model, posed from our own yaw and pitch.
 public class MetroCarEntityRenderer extends EntityRenderer<MetroCarEntity, MetroCarEntityRenderer.State> {
 
-    private static final Identifier TEXTURE = Identifier.ofVanilla("textures/entity/minecart.png");
+    private static final Identifier TEXTURE = Identifier.of(MmsMetro.MOD_ID, "textures/entity/metro_cart.png");
 
     private final MinecartEntityModel model;
 
