@@ -26,9 +26,6 @@ public final class Consist {
 
     private enum Phase { RUNNING, DWELLING }
 
-    // How far ahead of a stop the "incoming" cue fires, in blocks.
-    private static final double INCOMING_DISTANCE = 12.0;
-
     // Radius, in blocks, to search around a station for a speaker block.
     private static final int SPEAKER_SEARCH_RADIUS = 5;
 
@@ -53,8 +50,6 @@ public final class Consist {
     private int dwellTimer;
 
     private int nextStationIndex;
-
-    private boolean incomingPlayed;
 
     // Set when the station currently being dwelt at is a terminus, so the train
     // turns around on departure instead of continuing.
@@ -121,11 +116,6 @@ public final class Consist {
         double targetArc = target != null ? target.arc() : this.path.length();
         double remaining = targetArc - this.headArc;
 
-        if (!this.incomingPlayed && remaining <= INCOMING_DISTANCE && remaining > 0.0) {
-            playFromLead(ModSounds.TRAIN_INCOMING, 1.0f);
-            this.incomingPlayed = true;
-        }
-
         // Brake once within stopping distance, otherwise accelerate to cruise.
         double brakingDistance = (this.speed * this.speed) / (2.0 * this.config.acceleration);
         if (remaining <= brakingDistance) {
@@ -177,7 +167,6 @@ public final class Consist {
         }
 
         playFromLead(ModSounds.DEPARTURE, 1.0f);
-        this.incomingPlayed = false;
         this.phase = Phase.RUNNING;
         if (this.reverseAfterDwell) {
             // The station commanded a turn-around: rebuild the path the other way.
@@ -208,12 +197,16 @@ public final class Consist {
             double arc = Math.max(0.0, this.headArc - i * this.config.carSpacing);
             PathPoint point = this.path.sample(arc);
             MetroCarEntity car = this.cars.get(i);
+            Vec3d previous = car.getEntityPos();
             car.setPosition(point.pos().x, point.pos().y, point.pos().z);
             car.setYaw(point.yaw());
             car.setPitch(point.pitch());
             car.setPathYaw(point.yaw());
             car.setPathPitch(point.pitch());
-            car.setVelocity(Vec3d.ZERO);
+            // Report this tick's movement as velocity so the client carries a
+            // seated rider along with the car instead of leaving them trailing
+            // a few ticks behind the teleported position.
+            car.setVelocity(point.pos().subtract(previous));
             car.setArcLength((float) arc);
             car.setHudInfo(this.currentLine, this.currentDirection, nextName, waiting);
         }
@@ -226,13 +219,31 @@ public final class Consist {
         }
     }
 
-    // Fires the arrival announcement for every bump the head has just passed.
+    // Fires the arrival announcement for every bump the head has just passed,
+    // and rings the upcoming station's speaker so waiting passengers hear the
+    // train approaching — the bump is the station's linked "incoming" trigger.
     private void fireCrossedBumps() {
         while (this.nextBumpIndex < this.bumps.size()
                 && this.headArc >= this.bumps.get(this.nextBumpIndex).arc()) {
-            setAnnouncement(buildAnnouncement(this.bumps.get(this.nextBumpIndex)));
+            info.mudbourn.mmsmetro.path.PathBump bump = this.bumps.get(this.nextBumpIndex);
+            setAnnouncement(buildAnnouncement(bump));
+            playIncomingAtStation(bump.stationPos());
             this.nextBumpIndex++;
         }
+    }
+
+    // Plays the "train incoming" cue at the station's speaker (or the station
+    // block itself if none is placed nearby), so the sound comes from the
+    // platform ahead rather than from the moving train.
+    private void playIncomingAtStation(BlockPos station) {
+        ServerWorld world = leadWorld();
+        if (world == null || station == null) {
+            return;
+        }
+        BlockPos speaker = findSpeaker(world, station);
+        BlockPos source = speaker != null ? speaker : station;
+        world.playSound(null, source.getX() + 0.5, source.getY() + 0.5, source.getZ() + 0.5,
+            ModSounds.TRAIN_INCOMING, SoundCategory.NEUTRAL, 1.0f, 1.0f);
     }
 
     // The arrival line a bump announces, e.g.
@@ -304,7 +315,6 @@ public final class Consist {
         this.headArc = Math.min((this.cars.size() - 1) * this.config.carSpacing, newPath.length());
         this.speed = 0.0;
         this.phase = Phase.RUNNING;
-        this.incomingPlayed = false;
         this.nextStationIndex = firstStationAhead(this.headArc);
         this.nextBumpIndex = firstBumpAhead(this.headArc);
         adoptIdentityFromNextStation();

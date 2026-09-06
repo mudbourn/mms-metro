@@ -68,7 +68,7 @@ public final class RailPath {
             if (ahead == null) {
                 continue;
             }
-            this.bumps.add(new PathBump(arc, ahead.name(), ahead.exitDirection(),
+            this.bumps.add(new PathBump(arc, ahead.pos(), ahead.name(), ahead.exitDirection(),
                 ahead.hub(), ahead.transferLine(), bump.terminus || ahead.terminus()));
         }
     }
@@ -217,10 +217,14 @@ public final class RailPath {
     }
 
     // How far a station block may sit from a rail node and still count: one
-    // block out horizontally (a platform marker beside the track) and up to two
-    // blocks up. The nearest node claims each block so it is only marked once.
+    // block out horizontally, and from two below to two above the rail. The
+    // primary placement is directly under the rail (the block the rail rests
+    // on), but a marker beside or on a platform above also counts. Blocks below
+    // are visited first, so an under-rail station wins ties against a side block.
+    // The nearest node claims each block so it is only marked once.
     private static final int STATION_H_RADIUS = 1;
     private static final int STATION_UP = 2;
+    private static final int STATION_DOWN = 2;
 
     // Records a station stop for the nearest StationBlock around this rail node.
     private static void addStationMark(World world, BlockPos rail, int nodeIndex,
@@ -229,7 +233,7 @@ public final class RailPath {
         BlockPos best = null;
         double bestSq = Double.MAX_VALUE;
         for (BlockPos pos : BlockPos.iterate(
-                rail.add(-r, 0, -r), rail.add(r, STATION_UP, r))) {
+                rail.add(-r, -STATION_DOWN, -r), rail.add(r, STATION_UP, r))) {
             if (claimed.contains(pos.toImmutable())
                 || !(world.getBlockState(pos).getBlock() instanceof StationBlock)) {
                 continue;
@@ -279,7 +283,7 @@ public final class RailPath {
         BlockPos best = null;
         double bestSq = Double.MAX_VALUE;
         for (BlockPos pos : BlockPos.iterate(
-                rail.add(-r, -1, -r), rail.add(r, STATION_UP, r))) {
+                rail.add(-r, -STATION_DOWN, -r), rail.add(r, STATION_UP, r))) {
             if (claimed.contains(pos.toImmutable())
                 || !(world.getBlockState(pos).getBlock() instanceof SpeedBumpBlock)) {
                 continue;
