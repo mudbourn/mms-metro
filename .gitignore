@@ -1,0 +1,11 @@
+data/*
+!data/ms_settings_default.json
+backups/
+ignore/
+.DS_Store
+*.pem
+*.log
+*.txt
+*.md
+!README.md
+!docs/*.md
