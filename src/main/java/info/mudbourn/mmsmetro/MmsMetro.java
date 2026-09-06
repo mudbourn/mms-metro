@@ -6,6 +6,7 @@ import info.mudbourn.mmsmetro.registry.ModBlockEntities;
 import info.mudbourn.mmsmetro.registry.ModBlocks;
 import info.mudbourn.mmsmetro.registry.ModEntities;
 import info.mudbourn.mmsmetro.registry.ModItems;
+import info.mudbourn.mmsmetro.train.ConsistManager;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import org.slf4j.Logger;
@@ -27,6 +28,8 @@ public class MmsMetro implements ModInitializer {
         ModItems.register();
         ModBlockEntities.register();
         ModEntities.register();
+
+        ConsistManager.init();
 
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
             MetroCommand.register(dispatcher));

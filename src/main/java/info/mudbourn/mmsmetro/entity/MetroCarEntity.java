@@ -24,6 +24,7 @@ public class MetroCarEntity extends Entity {
 
     public MetroCarEntity(EntityType<? extends MetroCarEntity> type, World world) {
         super(type, world);
+        this.setNoGravity(true);
     }
 
     @Override
