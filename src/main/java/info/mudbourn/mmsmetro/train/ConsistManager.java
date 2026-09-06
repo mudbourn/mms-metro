@@ -43,10 +43,40 @@ public final class ConsistManager {
             return ActionResult.PASS;
         }
 
-        if (world instanceof ServerWorld serverWorld && !removeContaining(serverWorld, car)) {
-            car.discard();
+        if (world instanceof ServerWorld serverWorld) {
+            removeConsist(serverWorld, car.getConsistId());
         }
         return ActionResult.SUCCESS;
+    }
+
+    // Every loaded metro car in the world, whether or not it is still tracked
+    // in the in-memory registry (which is empty after a reload).
+    private static List<? extends MetroCarEntity> allCars(ServerWorld world) {
+        return world.getEntitiesByType(ModEntities.METRO_CAR, car -> true);
+    }
+
+    // Discards every car sharing a consist id and drops that consist from the
+    // live registry. Returns the number of cars removed.
+    private static int removeConsist(ServerWorld world, java.util.UUID consistId) {
+        int removed = 0;
+        for (MetroCarEntity car : allCars(world)) {
+            if (car.getConsistId().equals(consistId)) {
+                car.discard();
+                removed++;
+            }
+        }
+        forgetConsist(world, consistId);
+        return removed;
+    }
+
+    // Drops any tracked consist whose lead car matches the id so it stops ticking.
+    private static void forgetConsist(ServerWorld world, java.util.UUID consistId) {
+        List<Consist> list = BY_WORLD.get(world);
+        if (list == null) {
+            return;
+        }
+        list.removeIf(consist -> !consist.cars().isEmpty()
+            && consist.cars().get(0).getConsistId().equals(consistId));
     }
 
     public static Consist spawn(ServerWorld world, BlockPos rail, Direction facing, int cars, MetroConfig config) {
@@ -57,9 +87,11 @@ public final class ConsistManager {
 
         double initialHead = Math.min((cars - 1) * config.carSpacing, path.length());
         Consist consist = new Consist(path, config, initialHead);
+        java.util.UUID consistId = java.util.UUID.randomUUID();
         for (int i = 0; i < cars; i++) {
             MetroCarEntity car = new MetroCarEntity(ModEntities.METRO_CAR, world);
             car.setCarIndex(i);
+            car.setConsistId(consistId);
             consist.addCar(car);
         }
 
@@ -82,49 +114,25 @@ public final class ConsistManager {
         return null;
     }
 
+    // Number of distinct trains (consists) removed.
     public static int removeAll(ServerWorld world) {
-        List<Consist> list = BY_WORLD.remove(world);
-        if (list == null) {
-            return 0;
+        java.util.Set<java.util.UUID> trains = new java.util.HashSet<>();
+        for (MetroCarEntity car : allCars(world)) {
+            trains.add(car.getConsistId());
+            car.discard();
         }
-
-        for (Consist consist : list) {
-            consist.discard();
-        }
-        return list.size();
-    }
-
-    public static boolean removeContaining(ServerWorld world, MetroCarEntity car) {
-        List<Consist> list = BY_WORLD.get(world);
-        if (list == null) {
-            return false;
-        }
-
-        for (Consist consist : list) {
-            if (consist.cars().contains(car)) {
-                consist.discard();
-                list.remove(consist);
-                return true;
-            }
-        }
-        return false;
+        BY_WORLD.remove(world);
+        return trains.size();
     }
 
     public static boolean removeNearest(ServerWorld world, Vec3d pos) {
-        List<Consist> list = BY_WORLD.get(world);
-        if (list == null || list.isEmpty()) {
-            return false;
-        }
-
-        Consist nearest = null;
+        MetroCarEntity nearest = null;
         double best = Double.MAX_VALUE;
-        for (Consist consist : list) {
-            for (MetroCarEntity car : consist.cars()) {
-                double distance = car.squaredDistanceTo(pos);
-                if (distance < best) {
-                    best = distance;
-                    nearest = consist;
-                }
+        for (MetroCarEntity car : allCars(world)) {
+            double distance = car.squaredDistanceTo(pos);
+            if (distance < best) {
+                best = distance;
+                nearest = car;
             }
         }
 
@@ -132,8 +140,7 @@ public final class ConsistManager {
             return false;
         }
 
-        nearest.discard();
-        list.remove(nearest);
+        removeConsist(world, nearest.getConsistId());
         return true;
     }
 

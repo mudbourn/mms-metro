@@ -35,6 +35,10 @@ public class MetroCarEntity extends Entity {
     private float prevPathYaw;
     private float prevPathPitch;
 
+    // Groups the cars of one train so a single car can be traced back to its
+    // whole consist even after a reload, when the in-memory registry is gone.
+    private java.util.UUID consistId = java.util.UUID.randomUUID();
+
     public MetroCarEntity(EntityType<? extends MetroCarEntity> type, World world) {
         super(type, world);
         this.setNoGravity(true);
@@ -89,6 +93,14 @@ public class MetroCarEntity extends Entity {
         this.prevPathPitch = this.getPathPitch();
     }
 
+    public java.util.UUID getConsistId() {
+        return this.consistId;
+    }
+
+    public void setConsistId(java.util.UUID value) {
+        this.consistId = value;
+    }
+
     public int getCarIndex() {
         return this.dataTracker.get(CAR_INDEX);
     }
@@ -105,6 +117,14 @@ public class MetroCarEntity extends Entity {
         this.setPathPitch(view.getFloat("PathPitch", 0.0f));
         this.prevPathYaw = this.getPathYaw();
         this.prevPathPitch = this.getPathPitch();
+        String stored = view.getString("ConsistId", "");
+        if (!stored.isEmpty()) {
+            try {
+                this.consistId = java.util.UUID.fromString(stored);
+            } catch (IllegalArgumentException ignored) {
+                // Keep the freshly generated id if the stored value is corrupt.
+            }
+        }
     }
 
     @Override
@@ -113,6 +133,7 @@ public class MetroCarEntity extends Entity {
         view.putInt("CarIndex", this.getCarIndex());
         view.putFloat("PathYaw", this.getPathYaw());
         view.putFloat("PathPitch", this.getPathPitch());
+        view.putString("ConsistId", this.consistId.toString());
     }
 
     @Override

@@ -70,15 +70,56 @@ public final class RailPath {
 
         double segLength = this.cumulative[i + 1] - this.cumulative[i];
         double t = segLength > 1.0e-6 ? (clamped - this.cumulative[i]) / segLength : 0.0;
-        Vec3d a = this.points.get(i);
-        Vec3d b = this.points.get(i + 1);
-        Vec3d pos = a.add(b.subtract(a).multiply(t));
 
-        Vec3d dir = b.subtract(a);
+        // Catmull-Rom through the four nodes around this segment: the curve still
+        // passes through every node but rounds the corners between them, and its
+        // tangent gives a heading that eases through turns instead of snapping.
+        Vec3d p0 = this.points.get(Math.max(0, i - 1));
+        Vec3d p1 = this.points.get(i);
+        Vec3d p2 = this.points.get(i + 1);
+        Vec3d p3 = this.points.get(Math.min(this.points.size() - 1, i + 2));
+
+        Vec3d pos = catmullRom(p0, p1, p2, p3, t);
+        Vec3d dir = catmullRomTangent(p0, p1, p2, p3, t);
+        if (dir.lengthSquared() < 1.0e-9) {
+            dir = p2.subtract(p1);
+        }
+
         float yaw = (float) Math.toDegrees(Math.atan2(-dir.x, dir.z));
         double horizontal = Math.sqrt(dir.x * dir.x + dir.z * dir.z);
         float pitch = (float) -Math.toDegrees(Math.atan2(dir.y, horizontal));
         return new PathPoint(pos, yaw, pitch);
+    }
+
+    // Standard (uniform, tension 0.5) Catmull-Rom interpolation at t in [0,1].
+    private static Vec3d catmullRom(Vec3d p0, Vec3d p1, Vec3d p2, Vec3d p3, double t) {
+        double t2 = t * t;
+        double t3 = t2 * t;
+        double x = 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t
+            + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2
+            + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3);
+        double y = 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * t
+            + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2
+            + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3);
+        double z = 0.5 * ((2 * p1.z) + (-p0.z + p2.z) * t
+            + (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * t2
+            + (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * t3);
+        return new Vec3d(x, y, z);
+    }
+
+    // Derivative of the Catmull-Rom curve above, used as the heading tangent.
+    private static Vec3d catmullRomTangent(Vec3d p0, Vec3d p1, Vec3d p2, Vec3d p3, double t) {
+        double t2 = t * t;
+        double x = 0.5 * ((-p0.x + p2.x)
+            + 2 * (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t
+            + 3 * (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t2);
+        double y = 0.5 * ((-p0.y + p2.y)
+            + 2 * (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t
+            + 3 * (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t2);
+        double z = 0.5 * ((-p0.z + p2.z)
+            + 2 * (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * t
+            + 3 * (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * t2);
+        return new Vec3d(x, y, z);
     }
 
     public static RailPath build(World world, BlockPos start, Direction initialDir, int maxNodes) {

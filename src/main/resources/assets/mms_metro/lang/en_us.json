@@ -1,5 +1,6 @@
 {
   "mms_metro.name": "MMS Metro",
+  "itemGroup.mms_metro.metro": "MMS Metro",
   "block.mms_metro.station_block": "Station",
   "block.mms_metro.metro_model_block": "Metro Model Block",
   "block.mms_metro.speaker_block": "Station Speaker",

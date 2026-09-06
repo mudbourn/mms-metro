@@ -1,6 +1,5 @@
 package info.mudbourn.mmsmetro.client.render;
 
-import info.mudbourn.mmsmetro.MmsMetro;
 import info.mudbourn.mmsmetro.entity.MetroCarEntity;
 import net.minecraft.client.render.OverlayTexture;
 import net.minecraft.client.render.command.OrderedRenderCommandQueue;
@@ -17,7 +16,7 @@ import net.minecraft.util.math.RotationAxis;
 // Draws a metro car with the vanilla minecart model, posed from our own yaw and pitch.
 public class MetroCarEntityRenderer extends EntityRenderer<MetroCarEntity, MetroCarEntityRenderer.State> {
 
-    private static final Identifier TEXTURE = Identifier.of(MmsMetro.MOD_ID, "textures/entity/metro_cart.png");
+    private static final Identifier TEXTURE = Identifier.ofVanilla("textures/entity/minecart.png");
 
     private final MinecartEntityModel model;
 
@@ -45,9 +44,11 @@ public class MetroCarEntityRenderer extends EntityRenderer<MetroCarEntity, Metro
         super.render(state, matrices, queue, camera);
 
         matrices.push();
+        // Match the vanilla minecart: orient about the rail pivot, then lift the
+        // body onto it, and flip into the model's coordinate space.
+        matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(90.0f - state.lerpedYaw));
+        matrices.multiply(RotationAxis.POSITIVE_Z.rotationDegrees(state.lerpedPitch));
         matrices.translate(0.0f, 0.375f, 0.0f);
-        matrices.multiply(RotationAxis.POSITIVE_Y.rotationDegrees(180.0f - state.lerpedYaw));
-        matrices.multiply(RotationAxis.POSITIVE_Z.rotationDegrees(-state.lerpedPitch));
         matrices.scale(-1.0f, -1.0f, 1.0f);
 
         queue.submitModel(
