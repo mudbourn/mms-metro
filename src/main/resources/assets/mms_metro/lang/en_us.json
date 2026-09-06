@@ -1,3 +1,7 @@
 {
-  "mms_metro.name": "MMS Metro"
+  "mms_metro.name": "MMS Metro",
+  "block.mms_metro.station_block": "Station",
+  "block.mms_metro.metro_model_block": "Metro Model Block",
+  "item.mms_metro.metro_spawner": "Metro Spawner",
+  "entity.mms_metro.metro_car": "Metro Car"
 }
