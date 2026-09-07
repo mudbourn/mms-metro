@@ -28,17 +28,14 @@ public class MetroCarEntity extends Entity {
     private static final TrackedData<Integer> CAR_INDEX =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.INTEGER);
 
-    // Path-derived orientation, tracked explicitly so the client rotates the
-    // model. Vanilla rotation sync is unreliable for a teleport-driven entity.
+    // Path-derived orientation, tracked explicitly so the client rotates the model (vanilla rotation sync is unreliable for a teleport-driven entity).
     private static final TrackedData<Float> PATH_YAW =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.FLOAT);
 
     private static final TrackedData<Float> PATH_PITCH =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.FLOAT);
 
-    // Onboard-HUD fields, stamped onto every car by the consist each tick so any
-    // rider — not just the lead car's — reads the same live line, direction, and
-    // next stop. Announcement carries the transient "Arriving at..." cue.
+    // Onboard-HUD fields, stamped onto every car each tick so any rider reads the same live line, direction, and next stop; announcement carries the transient "Arriving at..." cue.
     private static final TrackedData<String> HUD_LINE =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.STRING);
 
@@ -54,18 +51,22 @@ public class MetroCarEntity extends Entity {
     private static final TrackedData<Boolean> HUD_WAITING =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
 
+    // ARGB colour the HUD tints the line name with, taken from the served station's line colour.
+    private static final TrackedData<Integer> HUD_LINE_COLOR =
+        DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.INTEGER);
+
+    // True once the train has crossed the approach bump and is braking in, so the HUD reads "Arriving at" rather than "Next stop".
+    private static final TrackedData<Boolean> HUD_ARRIVING =
+        DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
+
     // Client-side interpolation of the tracked orientation.
     private float prevPathYaw;
     private float prevPathPitch;
 
-    // Smooths the car's position between the per-tick teleports the consist
-    // sends, so on the client the body and its riders advance together over the
-    // tracking interval instead of the rider snapping to each packet while the
-    // body eases toward it — that mismatch is what made riders trail the car.
+    // Smooths the car's position between the consist's per-tick teleports so the body and its riders advance together over the tracking interval instead of the rider trailing the car.
     private final PositionInterpolator interpolator = new PositionInterpolator(this, 1);
 
-    // Groups the cars of one train so a single car can be traced back to its
-    // whole consist even after a reload, when the in-memory registry is gone.
+    // Groups the cars of one train so a car can be traced to its whole consist even after a reload, when the in-memory registry is gone.
     private java.util.UUID consistId = java.util.UUID.randomUUID();
 
     public MetroCarEntity(EntityType<? extends MetroCarEntity> type, World world) {
@@ -84,6 +85,8 @@ public class MetroCarEntity extends Entity {
         builder.add(HUD_NEXT_STATION, "");
         builder.add(HUD_ANNOUNCEMENT, "");
         builder.add(HUD_WAITING, false);
+        builder.add(HUD_LINE_COLOR, 0xFFF5A623);
+        builder.add(HUD_ARRIVING, false);
     }
 
     public String getHudLine() {
@@ -106,8 +109,16 @@ public class MetroCarEntity extends Entity {
         return this.dataTracker.get(HUD_WAITING);
     }
 
+    public int getHudLineColor() {
+        return this.dataTracker.get(HUD_LINE_COLOR);
+    }
+
+    public boolean isHudArriving() {
+        return this.dataTracker.get(HUD_ARRIVING);
+    }
+
     // Called by the consist for every car so all riders share one readout.
-    public void setHudInfo(String line, String direction, String nextStation, boolean waiting) {
+    public void setHudInfo(String line, String direction, String nextStation, boolean waiting, int lineColor, boolean arriving) {
         if (!this.dataTracker.get(HUD_LINE).equals(line)) {
             this.dataTracker.set(HUD_LINE, line);
         }
@@ -119,6 +130,12 @@ public class MetroCarEntity extends Entity {
         }
         if (this.dataTracker.get(HUD_WAITING) != waiting) {
             this.dataTracker.set(HUD_WAITING, waiting);
+        }
+        if (this.dataTracker.get(HUD_LINE_COLOR) != lineColor) {
+            this.dataTracker.set(HUD_LINE_COLOR, lineColor);
+        }
+        if (this.dataTracker.get(HUD_ARRIVING) != arriving) {
+            this.dataTracker.set(HUD_ARRIVING, arriving);
         }
     }
 
@@ -164,8 +181,7 @@ public class MetroCarEntity extends Entity {
     @Override
     public void tick() {
         super.tick();
-        // On the client, advance the position interpolator so the car eases
-        // between tracked packets; the server drives position from the consist.
+        // On the client, advance the interpolator so the car eases between tracked packets; the server drives position from the consist.
         if (this.getEntityWorld().isClient()) {
             this.interpolator.tick();
         }
@@ -222,11 +238,7 @@ public class MetroCarEntity extends Entity {
         view.putString("ConsistId", this.consistId.toString());
     }
 
-    // Seat slots inside the car body as {forward, lateral} offsets in blocks,
-    // ordered from the centre outward so a single rider sits in the middle of
-    // the car rather than at a corner. Forward spans the minecart's ~1-block
-    // length and lateral its width, keeping every rider on the body, not out
-    // over the coupling gap between cars.
+    // Seat slots inside the car body as {forward, lateral} offsets in blocks, ordered centre-outward so a lone rider sits in the middle, spanning the minecart's length and width so no one sits over the coupling gap.
     private static final double[][] SEAT_SLOTS = {
         {0.0, 0.0},
         {-0.5, -0.25}, {-0.5, 0.25},
@@ -254,8 +266,7 @@ public class MetroCarEntity extends Entity {
         return this.getPassengerList().size() < MAX_PASSENGERS;
     }
 
-    // Seats each rider at a distinct slot, rotated into world space by the car's
-    // path heading, so riders sit in formation and turn with the car.
+    // Seats each rider at a distinct slot, rotated into world space by the car's path heading, so riders sit in formation and turn with the car.
     @Override
     public Vec3d getPassengerRidingPos(Entity passenger) {
         int index = this.getPassengerList().indexOf(passenger);
@@ -279,8 +290,7 @@ public class MetroCarEntity extends Entity {
         return true;
     }
 
-    // Vanilla Entity is not pickable by default; without this the attack raycast
-    // skips the car, so left-clicking it with the spawner never registers a hit.
+    // Vanilla Entity is not pickable by default; without this the attack raycast skips the car, so left-clicking it with the spawner never registers a hit.
     @Override
     public boolean canHit() {
         return !this.isRemoved();

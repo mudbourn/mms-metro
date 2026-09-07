@@ -7,13 +7,10 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.entity.Entity;
 import net.minecraft.text.Text;
 
-// The onboard display shown to a seated rider: which line they are on, the
-// direction of travel, and the next stop. Reads straight off the car entity the
-// player rides, whose fields the server stamps on every car in the consist.
+// The onboard display shown to a seated rider (line, direction of travel, next stop), read straight off the car entity the player rides.
 public final class MetroHud {
 
     private static final int PANEL_BG = 0xC0101014;
-    private static final int ACCENT = 0xFFF5A623;
     private static final int WHITE = 0xFFFFFFFF;
     private static final int LABEL = 0xFF9AA0A6;
     private static final int MARGIN = 6;
@@ -38,16 +35,18 @@ public final class MetroHud {
         String next = car.getHudNextStation();
         String announcement = car.getHudAnnouncement();
         boolean waiting = car.isHudWaiting();
+        boolean arriving = car.isHudArriving();
+        int lineColor = car.getHudLineColor();
 
         // Build the lines from the top down; skip anything the station left blank.
         java.util.List<Line> rows = new java.util.ArrayList<>();
         if (!line.isEmpty()) {
-            rows.add(new Line(line, ACCENT, true));
+            rows.add(new Line(line, lineColor, true));
         }
         if (!direction.isEmpty()) {
             rows.add(new Line(direction, WHITE, false));
         }
-        String nextLabel = waiting ? "Now arriving" : "Next stop";
+        String nextLabel = waiting ? "Now at" : (arriving ? "Arriving at" : "Next stop");
         rows.add(new Line(nextLabel + ": " + (next.isEmpty() ? "*" : next), LABEL, false));
         if (!announcement.isEmpty()) {
             rows.add(new Line(announcement, WHITE, false));
@@ -67,7 +66,7 @@ public final class MetroHud {
         int y = MARGIN;
 
         context.fill(x, y, x + panelW, y + panelH, PANEL_BG);
-        context.fill(x, y, x + 2, y + panelH, ACCENT);
+        context.fill(x, y, x + 2, y + panelH, lineColor);
 
         int ty = y + PAD;
         for (Line row : rows) {

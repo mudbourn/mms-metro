@@ -2,9 +2,7 @@ package info.mudbourn.mmsmetro.path;
 
 import net.minecraft.util.math.BlockPos;
 
-// A station stop resolved onto the path: where along the track a train halts,
-// how long it dwells, the marker block it belongs to (for speaker lookup), and
-// the station's editable identity used by the onboard HUD and announcements.
+// A station stop resolved onto the path: where a train halts, how long it dwells, its marker block (for speaker lookup), and its editable identity for the HUD and announcements.
 public record PathStation(
     double arc,
     int dwellTicks,
@@ -16,5 +14,6 @@ public record PathStation(
     String nextStation,
     String exitDirection,
     boolean hub,
-    String transferLine) {
+    String transferLine,
+    String lineColor) {
 }

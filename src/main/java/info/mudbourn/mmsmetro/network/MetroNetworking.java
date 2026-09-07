@@ -24,7 +24,7 @@ public final class MetroNetworking {
     }
 
     // Server->client: open the station editor pre-filled with current values.
-    public record OpenStationScreen(BlockPos pos, String name, String line, String direction,
+    public record OpenStationScreen(BlockPos pos, String name, String line, String color, String direction,
                                     String next, String exit, String transfer,
                                     boolean hub, boolean terminus, int dwell) implements CustomPayload {
         public static final Id<OpenStationScreen> ID =
@@ -34,6 +34,7 @@ public final class MetroNetworking {
                 buf.writeBlockPos(v.pos);
                 buf.writeString(v.name);
                 buf.writeString(v.line);
+                buf.writeString(v.color);
                 buf.writeString(v.direction);
                 buf.writeString(v.next);
                 buf.writeString(v.exit);
@@ -42,7 +43,7 @@ public final class MetroNetworking {
                 buf.writeBoolean(v.terminus);
                 buf.writeVarInt(v.dwell);
             },
-            buf -> new OpenStationScreen(buf.readBlockPos(), buf.readString(), buf.readString(),
+            buf -> new OpenStationScreen(buf.readBlockPos(), buf.readString(), buf.readString(), buf.readString(),
                 buf.readString(), buf.readString(), buf.readString(), buf.readString(),
                 buf.readBoolean(), buf.readBoolean(), buf.readVarInt()));
 
@@ -53,7 +54,7 @@ public final class MetroNetworking {
     }
 
     // Client->server: apply the edited station values.
-    public record StationEdit(BlockPos pos, String name, String line, String direction,
+    public record StationEdit(BlockPos pos, String name, String line, String color, String direction,
                               String next, String exit, String transfer,
                               boolean hub, boolean terminus, int dwell) implements CustomPayload {
         public static final Id<StationEdit> ID =
@@ -63,6 +64,7 @@ public final class MetroNetworking {
                 buf.writeBlockPos(v.pos);
                 buf.writeString(v.name);
                 buf.writeString(v.line);
+                buf.writeString(v.color);
                 buf.writeString(v.direction);
                 buf.writeString(v.next);
                 buf.writeString(v.exit);
@@ -71,7 +73,7 @@ public final class MetroNetworking {
                 buf.writeBoolean(v.terminus);
                 buf.writeVarInt(v.dwell);
             },
-            buf -> new StationEdit(buf.readBlockPos(), buf.readString(), buf.readString(),
+            buf -> new StationEdit(buf.readBlockPos(), buf.readString(), buf.readString(), buf.readString(),
                 buf.readString(), buf.readString(), buf.readString(), buf.readString(),
                 buf.readBoolean(), buf.readBoolean(), buf.readVarInt()));
 
@@ -135,7 +137,7 @@ public final class MetroNetworking {
     // Sends the station editor to a player looking at a station block.
     public static void openStation(ServerPlayerEntity player, BlockPos pos, StationBlockEntity station) {
         ServerPlayNetworking.send(player, new OpenStationScreen(pos,
-            station.getStationName(), station.getLineName(), station.getLineDirection(),
+            station.getStationName(), station.getLineName(), station.getLineColor(), station.getLineDirection(),
             station.getNextStation(), station.getExitDirection(), station.getTransferLine(),
             station.isHub(), station.isTerminus(), station.getDwellTicks()));
     }
@@ -153,6 +155,7 @@ public final class MetroNetworking {
         if (world.getBlockEntity(edit.pos()) instanceof StationBlockEntity station) {
             station.setStationName(edit.name());
             station.setLineName(edit.line());
+            station.setLineColor(edit.color());
             station.setLineDirection(edit.direction());
             station.setNextStation(edit.next());
             station.setExitDirection(edit.exit());

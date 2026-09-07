@@ -66,7 +66,7 @@ public final class RailPath {
                 this.stations.add(new PathStation(
                     this.cumulative[mark.nodeIndex], mark.dwellTicks, mark.pos, mark.terminus,
                     mark.name, mark.line, mark.direction, mark.nextStation,
-                    mark.exitDirection, mark.hub, mark.transferLine));
+                    mark.exitDirection, mark.hub, mark.transferLine, mark.lineColor));
             }
         }
 
@@ -127,7 +127,7 @@ public final class RailPath {
     // A station found at a node, before arc-lengths are known.
     private record StationMark(int nodeIndex, int dwellTicks, BlockPos pos, boolean terminus,
                               String name, String line, String direction, String nextStation,
-                              String exitDirection, boolean hub, String transferLine) {
+                              String exitDirection, boolean hub, String transferLine, String lineColor) {
     }
 
     // A speed bump found at a node, before arc-lengths are known.
@@ -276,6 +276,7 @@ public final class RailPath {
         String exitDirection = "";
         boolean hub = false;
         String transferLine = "";
+        String lineColor = "white";
         BlockEntity be = world.getBlockEntity(best);
         if (be instanceof StationBlockEntity station) {
             dwell = station.getDwellTicks();
@@ -287,9 +288,10 @@ public final class RailPath {
             exitDirection = station.getExitDirection();
             hub = station.isHub();
             transferLine = station.getTransferLine();
+            lineColor = station.getLineColor();
         }
         return new StationMark(nodeIndex, dwell, best, terminus,
-            name, line, direction, nextStation, exitDirection, hub, transferLine);
+            name, line, direction, nextStation, exitDirection, hub, transferLine, lineColor);
     }
 
     // How far a marker may sit from a rail node and still count: one block out horizontally, two below to two above; primary placement is under the rail, but beside or on a platform above also counts, bound to the single nearest node.

@@ -14,8 +14,10 @@ public class StationBlockEntity extends BlockEntity {
 
     private String lineName = "";
 
-    // Human-facing direction label for the line here, e.g. "Northbound" or
-    // "Downtown & Brooklyn". Shown on the onboard HUD; free text.
+    // The line's colour, stored as a DyeColor name (e.g. "red"); tints the line on the onboard HUD.
+    private String lineColor = "white";
+
+    // Human-facing direction label for the line here (e.g. "Northbound"), free text shown on the onboard HUD.
     private String lineDirection = "";
 
     // Name of the next station down the line, for the HUD "Next stop" readout.
@@ -31,8 +33,7 @@ public class StationBlockEntity extends BlockEntity {
 
     private int dwellTicks = 100;
 
-    // When true, a train that stops here turns around instead of continuing;
-    // this is the station's "command" that steers the train's direction.
+    // When true, a train that stops here turns around instead of continuing; the station's command that steers the train's direction.
     private boolean terminus = false;
 
     public StationBlockEntity(BlockPos pos, BlockState state) {
@@ -111,6 +112,15 @@ public class StationBlockEntity extends BlockEntity {
         this.markDirty();
     }
 
+    public String getLineColor() {
+        return this.lineColor;
+    }
+
+    public void setLineColor(String value) {
+        this.lineColor = value;
+        this.markDirty();
+    }
+
     public int getDwellTicks() {
         return this.dwellTicks;
     }
@@ -125,6 +135,7 @@ public class StationBlockEntity extends BlockEntity {
         super.readData(view);
         this.stationName = view.getString("StationName", "");
         this.lineName = view.getString("LineName", "");
+        this.lineColor = view.getString("LineColor", "white");
         this.lineDirection = view.getString("LineDirection", "");
         this.nextStation = view.getString("NextStation", "");
         this.exitDirection = view.getString("ExitDirection", "");
@@ -139,6 +150,7 @@ public class StationBlockEntity extends BlockEntity {
         super.writeData(view);
         view.putString("StationName", this.stationName);
         view.putString("LineName", this.lineName);
+        view.putString("LineColor", this.lineColor);
         view.putString("LineDirection", this.lineDirection);
         view.putString("NextStation", this.nextStation);
         view.putString("ExitDirection", this.exitDirection);

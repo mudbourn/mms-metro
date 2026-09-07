@@ -62,6 +62,14 @@ public final class Consist {
     // Set once a bump for the upcoming station is crossed, so the train eases down from the bump to a smooth halt at the platform.
     private boolean approachBraking;
 
+    // Ticks the train holds after sounding its departure horn before it actually pulls out (3 seconds).
+    private static final int DEPART_DELAY_TICKS = 60;
+
+    // True while the departure horn has sounded and the train is counting down before it starts moving.
+    private boolean departing;
+
+    private int departTimer;
+
     private int rollingTimer;
 
     // Counts down between buffer-wait cues while held behind another train.
@@ -83,6 +91,9 @@ public final class Consist {
 
     private String currentDirection = "";
 
+    // ARGB tint for the line name on the HUD, taken from the served station's line colour.
+    private int currentLineColor = 0xFFF5A623;
+
     public Consist(RailPath path, MetroConfig config, double initialHeadArc) {
         this.path = path;
         this.config = config;
@@ -101,7 +112,14 @@ public final class Consist {
         if (next != null) {
             this.currentLine = next.line();
             this.currentDirection = next.direction();
+            this.currentLineColor = lineColorArgb(next.lineColor());
         }
+    }
+
+    // Maps a DyeColor name to an opaque ARGB int for the HUD, defaulting to white for unknown names.
+    private static int lineColorArgb(String name) {
+        net.minecraft.util.DyeColor dye = net.minecraft.util.DyeColor.byId(name, net.minecraft.util.DyeColor.WHITE);
+        return 0xFF000000 | (dye.getEntityColor() & 0xFFFFFF);
     }
 
     public void addCar(MetroCarEntity car) {
@@ -267,6 +285,9 @@ public final class Consist {
     private void arriveAt(PathStation station) {
         playArrival(station);
         this.phase = Phase.DWELLING;
+        // Fresh stop: clear any leftover departure countdown from the previous one.
+        this.departing = false;
+        this.departTimer = 0;
         // Served this stop: disarm the ease-down until the next bump arms it again.
         this.approachBraking = false;
         // A station's own dwell overrides the global default when it sets one.
@@ -280,39 +301,43 @@ public final class Consist {
         if (!station.direction().isEmpty()) {
             this.currentDirection = station.direction();
         }
-        // Stopped at the platform: show where the exits are on this stop.
-        setAnnouncement(buildStopAnnouncement(station));
+        this.currentLineColor = lineColorArgb(station.lineColor());
+        // Stopped and dwelling: a boarding status while the train waits; the stop name is on the grey HUD line.
+        setAnnouncement("The train will depart shortly.");
     }
 
-    // The arrived cue shown while stopped: a terminal notice and which way the exits lie.
-    private static String buildStopAnnouncement(PathStation station) {
-        String exit = station.exitDirection();
-        if (station.terminus()) {
-            StringBuilder sb = new StringBuilder("This is a terminal station.");
-            if (!exit.isEmpty()) {
-                sb.append(" Exit on the ").append(exit).append(", please.");
-            }
-            return sb.toString();
-        }
-        return exit.isEmpty() ? "" : "Exits are on the " + exit + ".";
-    }
-
-    // The departing cue: the next stop, its transfer if any, and the track-safety warning.
+    // The departing cue: the next stop's transfer if any, then the stay-seated warning. The next stop's name is left to the grey HUD line.
     private String buildDepartAnnouncement() {
         PathStation next = nextStation();
         StringBuilder sb = new StringBuilder();
-        if (next != null && !next.name().isEmpty()) {
-            sb.append("Next stop: ").append(next.name()).append('.');
-            if (next.hub() && !next.transferLine().isEmpty()) {
-                sb.append(" Transfer for ").append(next.transferLine()).append('.');
-            }
-            sb.append(' ');
+        if (next != null && next.hub() && !next.transferLine().isEmpty()) {
+            sb.append("Transfer for ").append(next.transferLine()).append(". ");
         }
-        sb.append("Please do not exit onto the tracks.");
+        sb.append("Please remain seated as the train departs.");
         return sb.toString();
     }
 
     private void tickDwell() {
+        // Counting down the post-horn hold: stay put until the delay elapses, then pull out.
+        if (this.departing) {
+            if (this.departTimer > 0) {
+                this.departTimer--;
+                return;
+            }
+            this.departing = false;
+            this.phase = Phase.RUNNING;
+            if (this.reverseAfterDwell) {
+                // The station commanded a turn-around: rebuild the path the other way.
+                this.reverseAfterDwell = false;
+                reverse();
+            } else {
+                this.nextStationIndex++;
+            }
+            // Pulling out: announce the next stop, its transfer, and the track warning.
+            setAnnouncement(buildDepartAnnouncement());
+            return;
+        }
+
         if (this.dwellTimer > 0) {
             this.dwellTimer--;
             return;
@@ -326,17 +351,10 @@ public final class Consist {
             return;
         }
 
+        // Sound the departure horn, then hold DEPART_DELAY_TICKS before the train starts moving.
         playFromLead(ModSounds.DEPARTURE, 1.0f);
-        this.phase = Phase.RUNNING;
-        if (this.reverseAfterDwell) {
-            // The station commanded a turn-around: rebuild the path the other way.
-            this.reverseAfterDwell = false;
-            reverse();
-        } else {
-            this.nextStationIndex++;
-        }
-        // Pulling out: announce the next stop, its transfer, and the track warning.
-        setAnnouncement(buildDepartAnnouncement());
+        this.departing = true;
+        this.departTimer = DEPART_DELAY_TICKS;
     }
 
     private void tickRolling() {
@@ -349,20 +367,24 @@ public final class Consist {
             return;
         }
         this.rollingTimer = 20;
-        float pitch = 0.7f + (float) (this.speed / this.config.maxSpeed) * 0.5f;
+        double speedRatio = Math.min(1.0, this.speed / this.config.maxSpeed);
+        float pitch = 0.7f + (float) speedRatio * 0.5f;
+        // Fade the volume with speed so the roar tapers to near-silence as the train brakes into a stop, instead of a full-volume instance lingering through the dwell.
+        float volume = 0.5f * (float) speedRatio;
         ServerWorld world = leadWorld();
         if (world == null || this.cars.isEmpty()) {
             return;
         }
         // Play from the lead entity so the sound tracks the moving train instead of staying pinned to where it fired.
         world.playSoundFromEntity(null, this.cars.get(0), SoundEvents.ENTITY_MINECART_RIDING,
-            SoundCategory.NEUTRAL, 0.5f, pitch);
+            SoundCategory.NEUTRAL, volume, pitch);
     }
 
     private void applyCarPositions() {
         PathStation next = nextStation();
         String nextName = next != null ? next.name() : "";
         boolean waiting = this.phase == Phase.DWELLING;
+        boolean arriving = this.approachBraking && this.phase == Phase.RUNNING;
         double len = this.path.length();
         for (int i = 0; i < this.cars.size(); i++) {
             double arc = this.headArc - i * this.config.carSpacing;
@@ -383,7 +405,7 @@ public final class Consist {
             // Report this tick's movement as velocity so the client carries a seated rider along instead of leaving them a few ticks behind the teleported position.
             car.setVelocity(point.pos().subtract(previous));
             car.setArcLength((float) arc);
-            car.setHudInfo(this.currentLine, this.currentDirection, nextName, waiting);
+            car.setHudInfo(this.currentLine, this.currentDirection, nextName, waiting, this.currentLineColor, arriving);
             // Re-seat riders onto the car's new position this same tick, so entity tick order never leaves them a tick behind.
             for (Entity passenger : car.getPassengerList()) {
                 car.updatePassengerPosition(passenger);
@@ -423,20 +445,17 @@ public final class Consist {
             ModSounds.TRAIN_INCOMING, SoundCategory.NEUTRAL, 1.0f, 1.0f);
     }
 
-    // The approaching cue a bump announces, in future tense, showing where the exits will be, e.g. "Arriving at: Central, exit will be on the left."
+    // The approaching cue a bump announces, in future tense, showing where the exits will be. The stop name is carried by the grey HUD line.
     private static String buildAnnouncement(info.mudbourn.mmsmetro.path.PathBump bump) {
-        String name = bump.stationName().isEmpty() ? "the next station" : bump.stationName();
         String exit = bump.exitDirection();
-        StringBuilder sb = new StringBuilder("Arriving at: ").append(name);
+        StringBuilder sb = new StringBuilder();
         if (bump.terminal()) {
-            sb.append(", this will be a terminal station.");
+            sb.append("This is a terminal station.");
             if (!exit.isEmpty()) {
                 sb.append(" Exit will be on the ").append(exit).append('.');
             }
         } else if (!exit.isEmpty()) {
-            sb.append(", exit will be on the ").append(exit).append('.');
-        } else {
-            sb.append('.');
+            sb.append("Exit will be on the ").append(exit).append('.');
         }
         return sb.toString();
     }

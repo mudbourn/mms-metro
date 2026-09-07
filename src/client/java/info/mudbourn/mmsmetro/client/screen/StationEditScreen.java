@@ -5,8 +5,10 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.gui.widget.CyclingButtonWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.text.Text;
+import net.minecraft.util.DyeColor;
 import net.minecraft.util.math.BlockPos;
 
 // The station editor: one field per station property, applied all at once when Done is pressed.
@@ -29,6 +31,7 @@ public class StationEditScreen extends Screen {
     private boolean terminus;
     private ButtonWidget hubButton;
     private ButtonWidget terminusButton;
+    private DyeColor lineColor = DyeColor.WHITE;
 
     public StationEditScreen(MetroNetworking.OpenStationScreen data) {
         super(Text.literal("Edit Station"));
@@ -43,7 +46,7 @@ public class StationEditScreen extends Screen {
         int leftX = this.width / 2 - FIELD_WIDTH - 8;
         int rightX = this.width / 2 + 8;
         // Center the block vertically so it never runs off the bottom at high GUI scales.
-        int contentHeight = ROW_SPACING * 4 + 28;
+        int contentHeight = ROW_SPACING * 5 + 28;
         int top = Math.max(30, (this.height - contentHeight) / 2 + 10);
 
         this.nameField = labeledField(leftX, top, this.data.name(), 64, "e.g. Central");
@@ -68,7 +71,17 @@ public class StationEditScreen extends Screen {
         }).dimensions(rightX + FIELD_WIDTH / 2 + 4, toggleY, FIELD_WIDTH / 2 - 4, FIELD_HEIGHT).build();
         this.addDrawableChild(this.terminusButton);
 
-        int bottom = top + ROW_SPACING * 4 + 8;
+        // Full-width line-colour dropdown spanning both columns.
+        this.lineColor = DyeColor.byId(this.data.color(), DyeColor.WHITE);
+        int colorY = top + ROW_SPACING * 4;
+        this.addDrawableChild(CyclingButtonWidget.builder(
+                (DyeColor dye) -> Text.literal("Line color: " + prettyName(dye)), this.lineColor)
+            .values(DyeColor.values())
+            .omitKeyText()
+            .build(leftX, colorY, FIELD_WIDTH * 2 + 16, FIELD_HEIGHT, Text.literal("Line color"),
+                (button, value) -> this.lineColor = value));
+
+        int bottom = top + ROW_SPACING * 5 + 8;
         this.addDrawableChild(ButtonWidget.builder(Text.literal("Done"), b -> save())
             .dimensions(this.width / 2 - 154, bottom, 150, 20).build());
         this.addDrawableChild(ButtonWidget.builder(Text.literal("Cancel"), b -> this.close())
@@ -82,6 +95,22 @@ public class StationEditScreen extends Screen {
         field.setText(value);
         this.addDrawableChild(field);
         return field;
+    }
+
+    // Turns a DyeColor's snake_case name into a spaced, capitalised label.
+    private static String prettyName(DyeColor dye) {
+        String[] parts = dye.getId().split("_");
+        StringBuilder sb = new StringBuilder();
+        for (String part : parts) {
+            if (part.isEmpty()) {
+                continue;
+            }
+            if (sb.length() > 0) {
+                sb.append(' ');
+            }
+            sb.append(Character.toUpperCase(part.charAt(0))).append(part.substring(1));
+        }
+        return sb.toString();
     }
 
     private Text hubMessage() {
@@ -100,7 +129,7 @@ public class StationEditScreen extends Screen {
             dwell = this.data.dwell();
         }
         ClientPlayNetworking.send(new MetroNetworking.StationEdit(this.data.pos(),
-            this.nameField.getText(), this.lineField.getText(), this.directionField.getText(),
+            this.nameField.getText(), this.lineField.getText(), this.lineColor.getId(), this.directionField.getText(),
             this.nextField.getText(), this.exitField.getText(), this.transferField.getText(),
             this.hub, this.terminus, dwell));
         this.close();
