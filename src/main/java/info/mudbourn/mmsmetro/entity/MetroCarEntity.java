@@ -2,6 +2,7 @@ package info.mudbourn.mmsmetro.entity;
 
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
+import net.minecraft.entity.PositionInterpolator;
 import net.minecraft.entity.data.DataTracker;
 import net.minecraft.entity.data.TrackedData;
 import net.minecraft.entity.data.TrackedDataHandlerRegistry;
@@ -56,6 +57,12 @@ public class MetroCarEntity extends Entity {
     // Client-side interpolation of the tracked orientation.
     private float prevPathYaw;
     private float prevPathPitch;
+
+    // Smooths the car's position between the per-tick teleports the consist
+    // sends, so on the client the body and its riders advance together over the
+    // tracking interval instead of the rider snapping to each packet while the
+    // body eases toward it — that mismatch is what made riders trail the car.
+    private final PositionInterpolator interpolator = new PositionInterpolator(this, 3);
 
     // Groups the cars of one train so a single car can be traced back to its
     // whole consist even after a reload, when the in-memory registry is gone.
@@ -157,9 +164,19 @@ public class MetroCarEntity extends Entity {
     @Override
     public void tick() {
         super.tick();
+        // On the client, advance the position interpolator so the car eases
+        // between tracked packets; the server drives position from the consist.
+        if (this.getEntityWorld().isClient()) {
+            this.interpolator.tick();
+        }
         // Carry orientation forward each tick so the render lerp has a baseline.
         this.prevPathYaw = this.getPathYaw();
         this.prevPathPitch = this.getPathPitch();
+    }
+
+    @Override
+    public PositionInterpolator getInterpolator() {
+        return this.interpolator;
     }
 
     public java.util.UUID getConsistId() {
@@ -205,13 +222,17 @@ public class MetroCarEntity extends Entity {
         view.putString("ConsistId", this.consistId.toString());
     }
 
-    // Seat layout: riders fill a grid of slots inside the car body, laid out
-    // along the car's length (rows) and across its width (columns).
-    private static final int SEAT_ROWS = 3;
-    private static final int SEAT_COLS = 2;
-    private static final int MAX_PASSENGERS = SEAT_ROWS * SEAT_COLS;
-    private static final double SEAT_ROW_SPACING = 0.7;
-    private static final double SEAT_COL_SPACING = 0.6;
+    // Seat slots inside the car body as {forward, lateral} offsets in blocks,
+    // ordered from the centre outward so a single rider sits in the middle of
+    // the car rather than at a corner. Forward spans the minecart's ~1-block
+    // length and lateral its width, keeping every rider on the body, not out
+    // over the coupling gap between cars.
+    private static final double[][] SEAT_SLOTS = {
+        {0.0, -0.25}, {0.0, 0.25},
+        {-0.5, -0.25}, {-0.5, 0.25},
+        {0.5, -0.25}, {0.5, 0.25},
+    };
+    private static final int MAX_PASSENGERS = SEAT_SLOTS.length;
     private static final double SEAT_HEIGHT = 0.1;
 
     @Override
@@ -238,15 +259,11 @@ public class MetroCarEntity extends Entity {
     @Override
     public Vec3d getPassengerRidingPos(Entity passenger) {
         int index = this.getPassengerList().indexOf(passenger);
-        if (index < 0) {
+        if (index < 0 || index >= SEAT_SLOTS.length) {
             index = 0;
         }
-        int row = index / SEAT_COLS;
-        int col = index % SEAT_COLS;
-
-        // Local offsets: forward along the car (centered), lateral across it.
-        double forward = (row - (SEAT_ROWS - 1) / 2.0) * SEAT_ROW_SPACING;
-        double lateral = (col - (SEAT_COLS - 1) / 2.0) * SEAT_COL_SPACING;
+        double forward = SEAT_SLOTS[index][0];
+        double lateral = SEAT_SLOTS[index][1];
 
         double yawRad = Math.toRadians(this.getPathYaw());
         double sin = Math.sin(yawRad);

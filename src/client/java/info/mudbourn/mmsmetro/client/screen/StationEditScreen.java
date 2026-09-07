@@ -1,0 +1,132 @@
+package info.mudbourn.mmsmetro.client.screen;
+
+import info.mudbourn.mmsmetro.network.MetroNetworking;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.minecraft.client.gui.DrawContext;
+import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.gui.widget.TextFieldWidget;
+import net.minecraft.text.Text;
+import net.minecraft.util.math.BlockPos;
+
+// The station editor: one field per station property, applied all at once when Done is pressed.
+public class StationEditScreen extends Screen {
+
+    private static final int FIELD_WIDTH = 220;
+    private static final int FIELD_HEIGHT = 18;
+    private static final int ROW_SPACING = 30;
+
+    private final MetroNetworking.OpenStationScreen data;
+
+    private TextFieldWidget nameField;
+    private TextFieldWidget lineField;
+    private TextFieldWidget directionField;
+    private TextFieldWidget nextField;
+    private TextFieldWidget exitField;
+    private TextFieldWidget transferField;
+    private TextFieldWidget dwellField;
+    private boolean hub;
+    private boolean terminus;
+    private ButtonWidget hubButton;
+    private ButtonWidget terminusButton;
+
+    public StationEditScreen(MetroNetworking.OpenStationScreen data) {
+        super(Text.literal("Edit Station"));
+        this.data = data;
+        this.hub = data.hub();
+        this.terminus = data.terminus();
+    }
+
+    @Override
+    protected void init() {
+        // Two columns of fields, then the toggles and Done row beneath them.
+        int leftX = this.width / 2 - FIELD_WIDTH - 8;
+        int rightX = this.width / 2 + 8;
+        // Center the block vertically so it never runs off the bottom at high GUI scales.
+        int contentHeight = ROW_SPACING * 4 + 28;
+        int top = Math.max(30, (this.height - contentHeight) / 2 + 10);
+
+        this.nameField = labeledField(leftX, top, this.data.name(), 64, "e.g. Central");
+        this.lineField = labeledField(leftX, top + ROW_SPACING, this.data.line(), 64, "e.g. Red Line");
+        this.directionField = labeledField(leftX, top + ROW_SPACING * 2, this.data.direction(), 64, "e.g. Northbound");
+        this.nextField = labeledField(leftX, top + ROW_SPACING * 3, this.data.next(), 64, "next station name");
+
+        this.exitField = labeledField(rightX, top, this.data.exit(), 32, "left / right / both");
+        this.transferField = labeledField(rightX, top + ROW_SPACING, this.data.transfer(), 64, "line to transfer to");
+        this.dwellField = labeledField(rightX, top + ROW_SPACING * 2, Integer.toString(this.data.dwell()), 6, "e.g. 60");
+
+        int toggleY = top + ROW_SPACING * 3;
+        this.hubButton = ButtonWidget.builder(hubMessage(), b -> {
+            this.hub = !this.hub;
+            b.setMessage(hubMessage());
+        }).dimensions(rightX, toggleY, FIELD_WIDTH / 2 - 4, FIELD_HEIGHT).build();
+        this.addDrawableChild(this.hubButton);
+
+        this.terminusButton = ButtonWidget.builder(terminusMessage(), b -> {
+            this.terminus = !this.terminus;
+            b.setMessage(terminusMessage());
+        }).dimensions(rightX + FIELD_WIDTH / 2 + 4, toggleY, FIELD_WIDTH / 2 - 4, FIELD_HEIGHT).build();
+        this.addDrawableChild(this.terminusButton);
+
+        int bottom = top + ROW_SPACING * 4 + 8;
+        this.addDrawableChild(ButtonWidget.builder(Text.literal("Done"), b -> save())
+            .dimensions(this.width / 2 - 154, bottom, 150, 20).build());
+        this.addDrawableChild(ButtonWidget.builder(Text.literal("Cancel"), b -> this.close())
+            .dimensions(this.width / 2 + 4, bottom, 150, 20).build());
+    }
+
+    private TextFieldWidget labeledField(int x, int y, String value, int maxLength, String placeholder) {
+        TextFieldWidget field = new TextFieldWidget(this.textRenderer, x, y, FIELD_WIDTH, FIELD_HEIGHT, Text.empty());
+        field.setMaxLength(maxLength);
+        field.setPlaceholder(Text.literal(placeholder));
+        field.setText(value);
+        this.addDrawableChild(field);
+        return field;
+    }
+
+    private Text hubMessage() {
+        return Text.literal("Hub: " + (this.hub ? "yes" : "no"));
+    }
+
+    private Text terminusMessage() {
+        return Text.literal("Terminus: " + (this.terminus ? "yes" : "no"));
+    }
+
+    private void save() {
+        int dwell;
+        try {
+            dwell = Math.max(0, Integer.parseInt(this.dwellField.getText().trim()));
+        } catch (NumberFormatException e) {
+            dwell = this.data.dwell();
+        }
+        ClientPlayNetworking.send(new MetroNetworking.StationEdit(this.data.pos(),
+            this.nameField.getText(), this.lineField.getText(), this.directionField.getText(),
+            this.nextField.getText(), this.exitField.getText(), this.transferField.getText(),
+            this.hub, this.terminus, dwell));
+        this.close();
+    }
+
+    @Override
+    public void render(DrawContext context, int mouseX, int mouseY, float delta) {
+        super.render(context, mouseX, mouseY, delta);
+        context.drawCenteredTextWithShadow(this.textRenderer, this.title, this.width / 2, 20, 0xFFFFFF);
+        // Field captions sit just above each box.
+        drawLabel(context, this.nameField, "Station name");
+        drawLabel(context, this.lineField, "Line");
+        drawLabel(context, this.directionField, "Direction");
+        drawLabel(context, this.nextField, "Next stop");
+        drawLabel(context, this.exitField, "Exit side (left/right/both)");
+        drawLabel(context, this.transferField, "Transfer line");
+        drawLabel(context, this.dwellField, "Dwell (ticks)");
+    }
+
+    private void drawLabel(DrawContext context, TextFieldWidget field, String label) {
+        context.drawTextWithShadow(this.textRenderer, Text.literal(label),
+            field.getX(), field.getY() - 10, 0xA0A0A0);
+    }
+
+    @Override
+    public boolean shouldPause() {
+        return false;
+    }
+}

@@ -1,15 +1,15 @@
 package info.mudbourn.mmsmetro.block;
 
 import com.mojang.serialization.MapCodec;
+import info.mudbourn.mmsmetro.network.MetroNetworking;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.state.StateManager;
 import net.minecraft.state.property.BooleanProperty;
 import net.minecraft.state.property.Properties;
-import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
-import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
@@ -43,12 +43,8 @@ public class SpeedBumpBlock extends Block {
     @Override
     protected ActionResult onUse(BlockState state, World world, BlockPos pos,
                                  PlayerEntity player, BlockHitResult hit) {
-        if (!world.isClient()) {
-            boolean terminus = !state.get(TERMINUS);
-            world.setBlockState(pos, state.with(TERMINUS, terminus));
-            player.sendMessage(Text.literal(terminus
-                ? "Speed bump set to terminus: announces the next stop as a terminal station."
-                : "Speed bump set to through: announces the next stop normally."), true);
+        if (!world.isClient() && player instanceof ServerPlayerEntity serverPlayer) {
+            MetroNetworking.openBump(serverPlayer, pos, state.get(TERMINUS));
         }
         return ActionResult.SUCCESS;
     }

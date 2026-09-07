@@ -9,3 +9,5 @@ run/
 *.md
 !README.md
 !docs/*.md
+
+.claude/settings.local.json

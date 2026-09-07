@@ -1,5 +1,6 @@
 package info.mudbourn.mmsmetro.train;
 
+import info.mudbourn.mmsmetro.MmsMetro;
 import info.mudbourn.mmsmetro.config.MetroConfig;
 import info.mudbourn.mmsmetro.entity.MetroCarEntity;
 import info.mudbourn.mmsmetro.item.MetroSpawnerItem;
@@ -25,6 +26,12 @@ import java.util.Map;
 public final class ConsistManager {
 
     private static final Map<ServerWorld, List<Consist>> BY_WORLD = new HashMap<>();
+
+    // How often, in ticks, we look for loaded cars with no live consist and
+    // rebuild one — the path back to motion after a restart or a chunk reload.
+    private static final int RECONCILE_INTERVAL = 20;
+
+    private static final Map<ServerWorld, Integer> RECONCILE_TIMERS = new HashMap<>();
 
     public static void init() {
         ServerTickEvents.END_WORLD_TICK.register(ConsistManager::tickWorld);
@@ -153,6 +160,13 @@ public final class ConsistManager {
     }
 
     private static void tickWorld(ServerWorld world) {
+        int timer = RECONCILE_TIMERS.getOrDefault(world, 0) - 1;
+        if (timer <= 0) {
+            timer = RECONCILE_INTERVAL;
+            reconcile(world);
+        }
+        RECONCILE_TIMERS.put(world, timer);
+
         List<Consist> list = BY_WORLD.get(world);
         if (list == null) {
             return;
@@ -167,5 +181,107 @@ public final class ConsistManager {
                 consist.tick();
             }
         }
+    }
+
+    // Rebuilds consists for any loaded cars that have no live consist ticking
+    // them. In-memory consists are lost on restart and dropped when their cars
+    // unload, but the car entities persist — so we group the loaded cars by
+    // consist id and reconstruct a consist for any group not already tracked by
+    // the same car objects (reloaded cars are new objects, so this refires).
+    private static void reconcile(ServerWorld world) {
+        Map<java.util.UUID, List<MetroCarEntity>> groups = new HashMap<>();
+        for (MetroCarEntity car : allCars(world)) {
+            if (!car.isRemoved()) {
+                groups.computeIfAbsent(car.getConsistId(), id -> new ArrayList<>()).add(car);
+            }
+        }
+        if (groups.isEmpty()) {
+            return;
+        }
+
+        List<Consist> list = BY_WORLD.computeIfAbsent(world, w -> new ArrayList<>());
+        for (Map.Entry<java.util.UUID, List<MetroCarEntity>> entry : groups.entrySet()) {
+            List<MetroCarEntity> cars = entry.getValue();
+            Consist tracked = trackedConsist(list, entry.getKey());
+            if (tracked != null && sameCars(tracked, cars)) {
+                continue;
+            }
+            if (tracked != null) {
+                list.remove(tracked);
+            }
+            Consist rebuilt = reconstruct(world, cars);
+            if (rebuilt != null) {
+                list.add(rebuilt);
+            }
+        }
+    }
+
+    // The tracked consist whose lead car carries this id, or null.
+    private static Consist trackedConsist(List<Consist> list, java.util.UUID consistId) {
+        for (Consist consist : list) {
+            if (!consist.cars().isEmpty()
+                && consist.cars().get(0).getConsistId().equals(consistId)) {
+                return consist;
+            }
+        }
+        return null;
+    }
+
+    // True when the consist is driving exactly these car objects (by identity),
+    // so a reloaded set of cars — new objects — counts as different.
+    private static boolean sameCars(Consist consist, List<MetroCarEntity> cars) {
+        return consist.cars().size() == cars.size() && consist.cars().containsAll(cars);
+    }
+
+    // Rebuilds one consist from its loaded cars, resolving a fresh path from the
+    // tail's rail in the direction the train faces so followers sit behind the
+    // lead exactly as they do at spawn.
+    private static Consist reconstruct(ServerWorld world, List<MetroCarEntity> cars) {
+        cars.sort(java.util.Comparator.comparingInt(MetroCarEntity::getCarIndex));
+        MetroCarEntity lead = cars.get(0);
+        MetroCarEntity tail = cars.get(cars.size() - 1);
+
+        BlockPos rail = findRail(world, tail.getBlockPos());
+        if (rail == null) {
+            rail = findRail(world, lead.getBlockPos());
+        }
+        if (rail == null) {
+            return null;
+        }
+
+        Direction heading = headingOf(lead, tail);
+        RailPath path = RailPath.build(world, rail, heading, RailPath.MAX_NODES);
+        if (path.length() <= 0.0) {
+            return null;
+        }
+
+        MetroConfig config = MmsMetro.config();
+        double headArc = Math.min((cars.size() - 1) * config.carSpacing, path.length());
+        Consist consist = new Consist(path, config, headArc);
+        for (MetroCarEntity car : cars) {
+            consist.addCar(car);
+        }
+        consist.placeCars();
+        return consist;
+    }
+
+    // The travel direction of a train: the tail-to-lead vector for a multi-car
+    // train, or the lead's stored heading for a single car.
+    private static Direction headingOf(MetroCarEntity lead, MetroCarEntity tail) {
+        if (lead != tail) {
+            double dx = lead.getX() - tail.getX();
+            double dz = lead.getZ() - tail.getZ();
+            if (Math.abs(dx) > 1.0e-4 || Math.abs(dz) > 1.0e-4) {
+                return Math.abs(dx) > Math.abs(dz)
+                    ? (dx > 0 ? Direction.EAST : Direction.WEST)
+                    : (dz > 0 ? Direction.SOUTH : Direction.NORTH);
+            }
+        }
+        return switch (Math.floorMod(Math.round(lead.getPathYaw() / 90.0f), 4)) {
+            case 0 -> Direction.SOUTH;
+            case 1 -> Direction.WEST;
+            case 2 -> Direction.NORTH;
+            default -> Direction.EAST;
+        };
     }
 }

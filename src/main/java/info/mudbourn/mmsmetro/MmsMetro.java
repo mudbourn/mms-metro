@@ -8,6 +8,7 @@ import info.mudbourn.mmsmetro.registry.ModEntities;
 import info.mudbourn.mmsmetro.registry.ModItemGroups;
 import info.mudbourn.mmsmetro.registry.ModItems;
 import info.mudbourn.mmsmetro.registry.ModSounds;
+import info.mudbourn.mmsmetro.network.MetroNetworking;
 import info.mudbourn.mmsmetro.train.ConsistManager;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -34,6 +35,7 @@ public class MmsMetro implements ModInitializer {
         ModSounds.register();
 
         ConsistManager.init();
+        MetroNetworking.register();
 
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
             MetroCommand.register(dispatcher));

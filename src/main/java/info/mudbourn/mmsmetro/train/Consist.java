@@ -40,6 +40,10 @@ public final class Consist {
 
     private List<info.mudbourn.mmsmetro.path.PathBump> bumps;
 
+    // True when the resolved path is a closed ring: the train circles it forever
+    // instead of shuttling back at the end of the station list.
+    private boolean loop;
+
     private int nextBumpIndex;
 
     private double headArc;
@@ -58,6 +62,9 @@ public final class Consist {
 
     private int rollingTimer;
 
+    // Counts down between buffer-wait cues while held behind another train.
+    private int bufferWaitTimer;
+
     // How often the path re-scans the world for stations and bumps, in ticks, so
     // markers placed after spawn register without a respawn.
     private static final int MARKER_REFRESH_INTERVAL = 20;
@@ -75,6 +82,7 @@ public final class Consist {
         this.path = path;
         this.config = config;
         this.headArc = Math.min(initialHeadArc, path.length());
+        this.loop = path.isLoop();
         this.stations = path.stations();
         this.bumps = path.bumps();
         this.nextStationIndex = firstStationAhead(this.headArc);
@@ -143,7 +151,20 @@ public final class Consist {
 
     private void tickRunning() {
         PathStation target = nextStation();
-        double targetArc = target != null ? target.arc() : this.path.length();
+        double len = this.path.length();
+        // On a loop, once past the last station the next stop is the first one
+        // again, across the seam. We cruise toward the seam (no station brake)
+        // and fold the arc back to the ring start when we reach it.
+        boolean wrap = wrappedTarget();
+        double stationArc = wrap
+            ? Double.POSITIVE_INFINITY
+            : (target != null ? target.arc() : len);
+
+        // A train ahead on our own path is a hard stop we hold behind, not a
+        // station: whichever constraint is nearer decides where we brake to.
+        double blockerArc = blockingTrainHoldArc();
+        boolean blockedByTrain = blockerArc < stationArc;
+        double targetArc = Math.min(stationArc, blockerArc);
         double remaining = targetArc - this.headArc;
 
         // Brake once within stopping distance, otherwise accelerate to cruise.
@@ -154,14 +175,29 @@ public final class Consist {
             this.speed = Math.min(this.config.maxSpeed, this.speed + this.config.acceleration);
         }
 
-        this.headArc += this.speed;
+        this.headArc = Math.min(this.headArc + this.speed, targetArc);
         fireCrossedBumps();
+
+        // Crossing the loop seam is not a stop: fold the arc back to the ring
+        // start and pick the station cycle up again without braking.
+        if (wrap && !blockedByTrain && len > 0.0 && this.headArc >= len) {
+            this.headArc -= len;
+            this.nextStationIndex = 0;
+            this.nextBumpIndex = firstBumpAhead(this.headArc);
+            this.bufferWaitTimer = 0;
+            tickRolling();
+            return;
+        }
 
         boolean stopped = this.headArc >= targetArc || (remaining <= brakingDistance && this.speed <= 1.0e-4);
         if (stopped) {
             this.headArc = targetArc;
             this.speed = 0.0;
-            if (target != null) {
+            if (blockedByTrain) {
+                // Caught behind another train: sit and wait for it to clear,
+                // sounding the buffer wait; re-check and resume next tick.
+                tickBufferWait();
+            } else if (target != null) {
                 arriveAt(target);
             } else {
                 // Reached the end of the track with no station ahead: shuttle back.
@@ -170,12 +206,63 @@ public final class Consist {
             return;
         }
 
+        this.bufferWaitTimer = 0;
         tickRolling();
+    }
+
+    // True when the train has served every station in the path list and is
+    // circling a loop back toward the first one across the seam.
+    private boolean wrappedTarget() {
+        return this.loop && !this.stations.isEmpty()
+            && this.nextStationIndex >= this.stations.size();
+    }
+
+    // Arc position we must not pass because another train occupies the track
+    // ahead, or +infinity if the line ahead is clear within our headway. The
+    // hold point keeps one car spacing of clearance behind the blocking train.
+    private double blockingTrainHoldArc() {
+        ServerWorld world = leadWorld();
+        if (world == null || this.cars.isEmpty()) {
+            return Double.POSITIVE_INFINITY;
+        }
+        java.util.UUID myId = this.cars.get(0).getConsistId();
+        double scanEnd = Math.min(this.path.length(), this.headArc + this.config.headway + this.config.carSpacing);
+
+        double nearestBlockerArc = Double.POSITIVE_INFINITY;
+        for (MetroCarEntity other : world.getEntitiesByType(
+                info.mudbourn.mmsmetro.registry.ModEntities.METRO_CAR, c -> true)) {
+            if (other.isRemoved() || other.getConsistId().equals(myId)) {
+                continue;
+            }
+            // Project the other car onto our path: the nearest sampled arc ahead
+            // whose point sits within a car's width of it counts as on our line.
+            for (double a = this.headArc + 0.5; a <= scanEnd; a += 1.0) {
+                Vec3d p = this.path.sample(a).pos();
+                if (p.squaredDistanceTo(other.getX(), other.getY(), other.getZ()) <= 2.25
+                        && a < nearestBlockerArc) {
+                    nearestBlockerArc = a;
+                    break;
+                }
+            }
+        }
+
+        if (nearestBlockerArc == Double.POSITIVE_INFINITY) {
+            return Double.POSITIVE_INFINITY;
+        }
+        return Math.max(this.headArc, nearestBlockerArc - this.config.carSpacing);
+    }
+
+    // Sounds the buffer-wait cue at a slow interval while held behind a train.
+    private void tickBufferWait() {
+        if (this.bufferWaitTimer-- > 0) {
+            return;
+        }
+        this.bufferWaitTimer = 40;
+        playFromLead(ModSounds.BUFFER_WAIT, 0.8f);
     }
 
     private void arriveAt(PathStation station) {
         playArrival(station);
-        playFromLead(ModSounds.BUFFER_WAIT, 0.8f);
         this.phase = Phase.DWELLING;
         this.dwellTimer = station.dwellTicks();
         this.reverseAfterDwell = station.terminus();
@@ -223,8 +310,16 @@ public final class Consist {
         PathStation next = nextStation();
         String nextName = next != null ? next.name() : "";
         boolean waiting = this.phase == Phase.DWELLING;
+        double len = this.path.length();
         for (int i = 0; i < this.cars.size(); i++) {
-            double arc = Math.max(0.0, this.headArc - i * this.config.carSpacing);
+            double arc = this.headArc - i * this.config.carSpacing;
+            // On a loop, followers wrap around the seam so the tail trails the
+            // lead across the join; on a line they simply clamp at the start.
+            if (this.loop && len > 0.0) {
+                arc = ((arc % len) + len) % len;
+            } else {
+                arc = Math.max(0.0, arc);
+            }
             PathPoint point = this.path.sample(arc);
             MetroCarEntity car = this.cars.get(i);
             Vec3d previous = car.getEntityPos();
@@ -345,6 +440,7 @@ public final class Consist {
         }
 
         this.path = newPath;
+        this.loop = newPath.isLoop();
         this.stations = newPath.stations();
         this.bumps = newPath.bumps();
         this.headArc = Math.min((this.cars.size() - 1) * this.config.carSpacing, newPath.length());
@@ -376,9 +472,14 @@ public final class Consist {
     }
 
     private PathStation nextStation() {
-        return this.nextStationIndex < this.stations.size()
-            ? this.stations.get(this.nextStationIndex)
-            : null;
+        if (this.nextStationIndex < this.stations.size()) {
+            return this.stations.get(this.nextStationIndex);
+        }
+        // Past the last stop on a loop, the next station is the first one again.
+        if (this.loop && !this.stations.isEmpty()) {
+            return this.stations.get(0);
+        }
+        return null;
     }
 
     private void playArrival(PathStation station) {

@@ -48,7 +48,7 @@ public final class MetroHud {
             rows.add(new Line(direction, WHITE, false));
         }
         String nextLabel = waiting ? "Now arriving" : "Next stop";
-        rows.add(new Line(nextLabel + ": " + (next.isEmpty() ? "—" : next), LABEL, false));
+        rows.add(new Line(nextLabel + ": " + (next.isEmpty() ? "*" : next), LABEL, false));
         if (!announcement.isEmpty()) {
             rows.add(new Line(announcement, WHITE, false));
         }
