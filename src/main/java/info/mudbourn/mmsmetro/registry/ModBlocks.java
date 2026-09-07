@@ -1,7 +1,6 @@
 package info.mudbourn.mmsmetro.registry;
 
 import info.mudbourn.mmsmetro.MmsMetro;
-import info.mudbourn.mmsmetro.block.MetroModelBlock;
 import info.mudbourn.mmsmetro.block.SpeakerBlock;
 import info.mudbourn.mmsmetro.block.SpeedBumpBlock;
 import info.mudbourn.mmsmetro.block.StationBlock;
@@ -22,8 +21,6 @@ public final class ModBlocks {
 
     public static Block STATION;
 
-    public static Block METRO_MODEL;
-
     public static Block SPEAKER;
 
     public static Block SPEED_BUMP;
@@ -31,12 +28,10 @@ public final class ModBlocks {
     public static void register() {
         STATION = register("station_block", StationBlock::new,
             AbstractBlock.Settings.copy(Blocks.IRON_BLOCK));
-        METRO_MODEL = register("metro_model_block", MetroModelBlock::new,
-            AbstractBlock.Settings.copy(Blocks.SMOOTH_STONE));
         SPEAKER = register("speaker_block", SpeakerBlock::new,
             AbstractBlock.Settings.copy(Blocks.NOTE_BLOCK));
         SPEED_BUMP = register("speed_bump", SpeedBumpBlock::new,
-            AbstractBlock.Settings.copy(Blocks.STONE_PRESSURE_PLATE));
+            AbstractBlock.Settings.copy(Blocks.SMOOTH_STONE));
     }
 
     private static Block register(String name, Function<AbstractBlock.Settings, Block> factory,

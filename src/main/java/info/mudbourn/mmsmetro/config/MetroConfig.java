@@ -27,10 +27,10 @@ public final class MetroConfig {
     // Number of cars a spawner creates, including the lead.
     public int carsPerTrain = 3;
 
-    // Ticks a train holds at a station before departing.
-    public int dwellTicks = 100;
+    // Ticks a train holds at a station before departing (200 = 10 seconds).
+    public int dwellTicks = 200;
 
-    // Minimum along-track headway a train keeps behind the train ahead.
+    // Gap in blocks a train keeps behind the train ahead when held.
     public double headway = 12.0;
 
     // Radius in chunks the consist force-loads around itself.

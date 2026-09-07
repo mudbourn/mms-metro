@@ -62,7 +62,7 @@ public class MetroCarEntity extends Entity {
     // sends, so on the client the body and its riders advance together over the
     // tracking interval instead of the rider snapping to each packet while the
     // body eases toward it — that mismatch is what made riders trail the car.
-    private final PositionInterpolator interpolator = new PositionInterpolator(this, 3);
+    private final PositionInterpolator interpolator = new PositionInterpolator(this, 1);
 
     // Groups the cars of one train so a single car can be traced back to its
     // whole consist even after a reload, when the in-memory registry is gone.
@@ -228,7 +228,7 @@ public class MetroCarEntity extends Entity {
     // length and lateral its width, keeping every rider on the body, not out
     // over the coupling gap between cars.
     private static final double[][] SEAT_SLOTS = {
-        {0.0, -0.25}, {0.0, 0.25},
+        {0.0, 0.0},
         {-0.5, -0.25}, {-0.5, 0.25},
         {0.5, -0.25}, {0.5, 0.25},
     };

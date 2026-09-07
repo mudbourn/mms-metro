@@ -20,9 +20,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-// An ordered train of cars sharing one resolved path. The lead advances by
-// arc-length, braking to a stop at each station, dwelling, then departing.
-// Every follower sits a fixed distance behind the lead on that path.
+// An ordered train of cars sharing one path: the lead advances by arc-length, stops and dwells at each station, followers trail at a fixed spacing.
 public final class Consist {
 
     private enum Phase { RUNNING, DWELLING }
@@ -40,8 +38,7 @@ public final class Consist {
 
     private List<info.mudbourn.mmsmetro.path.PathBump> bumps;
 
-    // True when the resolved path is a closed ring: the train circles it forever
-    // instead of shuttling back at the end of the station list.
+    // True when the path is a closed ring the train circles forever instead of shuttling back at the end of the station list.
     private boolean loop;
 
     private int nextBumpIndex;
@@ -54,26 +51,34 @@ public final class Consist {
 
     private int dwellTimer;
 
+    // The dwell length resolved for the current stop, so a gated restart repeats it.
+    private int currentDwellTicks;
+
     private int nextStationIndex;
 
-    // Set when the station currently being dwelt at is a terminus, so the train
-    // turns around on departure instead of continuing.
+    // Set when the current dwell is at a terminus, so the train turns around on departure instead of continuing.
     private boolean reverseAfterDwell;
+
+    // Set once a bump for the upcoming station is crossed, so the train eases down from the bump to a smooth halt at the platform.
+    private boolean approachBraking;
 
     private int rollingTimer;
 
     // Counts down between buffer-wait cues while held behind another train.
     private int bufferWaitTimer;
 
-    // How often the path re-scans the world for stations and bumps, in ticks, so
-    // markers placed after spawn register without a respawn.
+    // Fixed hold served when caught behind a train, in ticks (10 seconds).
+    private static final int BUFFER_HOLD_TICKS = 200;
+
+    // Ticks left of the forced hold behind a blocking train, served in full rather than resuming the instant the one ahead moves.
+    private int bufferHold;
+
+    // How often the path re-scans the world for markers, in ticks, so ones placed after spawn register without a respawn.
     private static final int MARKER_REFRESH_INTERVAL = 20;
 
     private int markerRefreshTimer;
 
-    // The train's live identity, shown on the onboard HUD. Set from the station
-    // the train most recently served (or the first one ahead at spawn) and
-    // carried until the next arrival changes it.
+    // The train's live identity for the onboard HUD, set from the last served station (or the first ahead at spawn) until the next arrival changes it.
     private String currentLine = "";
 
     private String currentDirection = "";
@@ -90,8 +95,7 @@ public final class Consist {
         adoptIdentityFromNextStation();
     }
 
-    // Seeds line/direction from the next station ahead so the HUD reads correctly
-    // before the train has served its first stop.
+    // Seeds line/direction from the next station ahead so the HUD reads right before the train serves its first stop.
     private void adoptIdentityFromNextStation() {
         PathStation next = nextStation();
         if (next != null) {
@@ -130,9 +134,7 @@ public final class Consist {
         applyCarPositions();
     }
 
-    // Re-scans the track for stations and bumps and re-derives which lie ahead,
-    // so markers placed while the train is running take effect on the next pass.
-    // Only runs while moving; during a dwell the indices must not be disturbed.
+    // Re-scans the track for markers and re-derives which lie ahead, so ones placed mid-run take effect next pass; only while moving, since a dwell must not disturb the indices.
     private void refreshMarkers() {
         ServerWorld world = leadWorld();
         if (world == null) {
@@ -150,27 +152,37 @@ public final class Consist {
     }
 
     private void tickRunning() {
+        // While serving the forced hold behind a train, stay put even if the one ahead has already pulled away.
+        if (this.bufferHold > 0) {
+            this.bufferHold--;
+            this.speed = 0.0;
+            return;
+        }
+
         PathStation target = nextStation();
         double len = this.path.length();
-        // On a loop, once past the last station the next stop is the first one
-        // again, across the seam. We cruise toward the seam (no station brake)
-        // and fold the arc back to the ring start when we reach it.
+        // On a loop, past the last station we cruise toward the seam with no station brake and fold the arc back to the ring start on reaching it.
         boolean wrap = wrappedTarget();
         double stationArc = wrap
             ? Double.POSITIVE_INFINITY
             : (target != null ? target.arc() : len);
 
-        // A train ahead on our own path is a hard stop we hold behind, not a
-        // station: whichever constraint is nearer decides where we brake to.
+        // A train ahead on our own path is a hard stop we hold behind, not a station; the nearer constraint decides where we brake.
         double blockerArc = blockingTrainHoldArc();
         boolean blockedByTrain = blockerArc < stationArc;
         double targetArc = Math.min(stationArc, blockerArc);
         double remaining = targetArc - this.headArc;
 
-        // Brake once within stopping distance, otherwise accelerate to cruise.
+        // Hard stopping distance is the safety floor; a crossed bump starts an earlier, gentler ease-down to the platform.
         double brakingDistance = (this.speed * this.speed) / (2.0 * this.config.acceleration);
+        boolean easeToStation = this.approachBraking && !blockedByTrain && target != null;
         if (remaining <= brakingDistance) {
             this.speed = Math.max(0.0, this.speed - this.config.acceleration);
+        } else if (easeToStation) {
+            // Decelerate just enough to reach zero at the station arc, never harder than a full brake.
+            double stopDist = Math.max(1.0e-3, stationArc - this.headArc);
+            double needed = (this.speed * this.speed) / (2.0 * stopDist);
+            this.speed = Math.max(0.0, this.speed - Math.min(needed, this.config.acceleration));
         } else {
             this.speed = Math.min(this.config.maxSpeed, this.speed + this.config.acceleration);
         }
@@ -178,12 +190,12 @@ public final class Consist {
         this.headArc = Math.min(this.headArc + this.speed, targetArc);
         fireCrossedBumps();
 
-        // Crossing the loop seam is not a stop: fold the arc back to the ring
-        // start and pick the station cycle up again without braking.
+        // Crossing the loop seam is not a stop: fold the arc back to the ring start and resume the station cycle without braking.
         if (wrap && !blockedByTrain && len > 0.0 && this.headArc >= len) {
             this.headArc -= len;
             this.nextStationIndex = 0;
             this.nextBumpIndex = firstBumpAhead(this.headArc);
+            this.approachBraking = false;
             this.bufferWaitTimer = 0;
             tickRolling();
             return;
@@ -194,9 +206,11 @@ public final class Consist {
             this.headArc = targetArc;
             this.speed = 0.0;
             if (blockedByTrain) {
-                // Caught behind another train: sit and wait for it to clear,
-                // sounding the buffer wait; re-check and resume next tick.
-                tickBufferWait();
+                // Caught behind another train: serve a fixed hold, sounding the cue once.
+                if (this.bufferHold <= 0) {
+                    playFromLead(ModSounds.BUFFER_WAIT, 0.8f);
+                }
+                this.bufferHold = BUFFER_HOLD_TICKS;
             } else if (target != null) {
                 arriveAt(target);
             } else {
@@ -210,23 +224,20 @@ public final class Consist {
         tickRolling();
     }
 
-    // True when the train has served every station in the path list and is
-    // circling a loop back toward the first one across the seam.
+    // True when the train has served every station and is circling a loop back toward the first across the seam.
     private boolean wrappedTarget() {
         return this.loop && !this.stations.isEmpty()
             && this.nextStationIndex >= this.stations.size();
     }
 
-    // Arc position we must not pass because another train occupies the track
-    // ahead, or +infinity if the line ahead is clear within our headway. The
-    // hold point keeps one car spacing of clearance behind the blocking train.
+    // Arc we must not pass because a train occupies the track ahead (keeping one car spacing clear), or +infinity when the line is clear within our headway.
     private double blockingTrainHoldArc() {
         ServerWorld world = leadWorld();
         if (world == null || this.cars.isEmpty()) {
             return Double.POSITIVE_INFINITY;
         }
         java.util.UUID myId = this.cars.get(0).getConsistId();
-        double scanEnd = Math.min(this.path.length(), this.headArc + this.config.headway + this.config.carSpacing);
+        double scanEnd = Math.min(this.path.length(), this.headArc + this.config.headway + this.config.carSpacing + this.config.maxSpeed);
 
         double nearestBlockerArc = Double.POSITIVE_INFINITY;
         for (MetroCarEntity other : world.getEntitiesByType(
@@ -234,8 +245,7 @@ public final class Consist {
             if (other.isRemoved() || other.getConsistId().equals(myId)) {
                 continue;
             }
-            // Project the other car onto our path: the nearest sampled arc ahead
-            // whose point sits within a car's width of it counts as on our line.
+            // Project the other car onto our path: the nearest sampled arc ahead within a car's width of it counts as on our line.
             for (double a = this.headArc + 0.5; a <= scanEnd; a += 1.0) {
                 Vec3d p = this.path.sample(a).pos();
                 if (p.squaredDistanceTo(other.getX(), other.getY(), other.getZ()) <= 2.25
@@ -249,22 +259,19 @@ public final class Consist {
         if (nearestBlockerArc == Double.POSITIVE_INFINITY) {
             return Double.POSITIVE_INFINITY;
         }
-        return Math.max(this.headArc, nearestBlockerArc - this.config.carSpacing);
-    }
-
-    // Sounds the buffer-wait cue at a slow interval while held behind a train.
-    private void tickBufferWait() {
-        if (this.bufferWaitTimer-- > 0) {
-            return;
-        }
-        this.bufferWaitTimer = 40;
-        playFromLead(ModSounds.BUFFER_WAIT, 0.8f);
+        // Hold a full headway behind the blocker, never closer than one car spacing.
+        double gap = Math.max(this.config.headway, this.config.carSpacing);
+        return Math.max(this.headArc, nearestBlockerArc - gap);
     }
 
     private void arriveAt(PathStation station) {
         playArrival(station);
         this.phase = Phase.DWELLING;
-        this.dwellTimer = station.dwellTicks();
+        // Served this stop: disarm the ease-down until the next bump arms it again.
+        this.approachBraking = false;
+        // A station's own dwell overrides the global default when it sets one.
+        this.currentDwellTicks = station.dwellTicks() > 0 ? station.dwellTicks() : this.config.dwellTicks;
+        this.dwellTimer = this.currentDwellTicks;
         this.reverseAfterDwell = station.terminus();
         // Serving this stop makes the train take on its line and direction.
         if (!station.line().isEmpty()) {
@@ -273,13 +280,48 @@ public final class Consist {
         if (!station.direction().isEmpty()) {
             this.currentDirection = station.direction();
         }
-        // Reaching the stop clears any pending "arriving" announcement.
-        setAnnouncement("");
+        // The stop block takes over from the bump's arriving cue with this station's exit and transfer detail.
+        setAnnouncement(buildStopAnnouncement(station));
+    }
+
+    // The onboard line shown while dwelling: terminal notice, transfer, and which way the exits lie.
+    private static String buildStopAnnouncement(PathStation station) {
+        String exit = station.exitDirection();
+        boolean trackSide = exit.equalsIgnoreCase("right");
+        StringBuilder sb = new StringBuilder();
+        if (station.terminus()) {
+            sb.append("This is a terminal station.");
+            if (trackSide) {
+                sb.append(" Do not exit onto the tracks.");
+            } else if (!exit.isEmpty()) {
+                sb.append(" Exit on the ").append(exit).append(", please.");
+            }
+        } else if (station.hub() && !station.transferLine().isEmpty()) {
+            sb.append("Transfer for ").append(station.transferLine()).append('.');
+            if (trackSide) {
+                sb.append(" Do not exit onto the tracks.");
+            } else if (!exit.isEmpty()) {
+                sb.append(" Exits are on the ").append(exit).append('.');
+            }
+        } else if (trackSide) {
+            sb.append("Do not exit onto the tracks.");
+        } else if (!exit.isEmpty()) {
+            sb.append("Exits are on the ").append(exit).append('.');
+        }
+        return sb.toString();
     }
 
     private void tickDwell() {
         if (this.dwellTimer > 0) {
             this.dwellTimer--;
+            return;
+        }
+
+        // Dwell elapsed: only depart if the train ahead has pulled far enough clear.
+        if (!Double.isInfinite(blockingTrainHoldArc())) {
+            // Still too close: restart the wait and re-sound the cue rather than departing into it.
+            this.dwellTimer = this.currentDwellTicks;
+            playFromLead(ModSounds.BUFFER_WAIT, 0.8f);
             return;
         }
 
@@ -296,6 +338,8 @@ public final class Consist {
 
     private void tickRolling() {
         if (this.speed <= 0.05) {
+            // Reset so the beat restarts in phase the moment the train moves again.
+            this.rollingTimer = 0;
             return;
         }
         if (this.rollingTimer-- > 0) {
@@ -303,7 +347,13 @@ public final class Consist {
         }
         this.rollingTimer = 20;
         float pitch = 0.7f + (float) (this.speed / this.config.maxSpeed) * 0.5f;
-        playFromLead(SoundEvents.ENTITY_MINECART_RIDING, 0.5f, pitch);
+        ServerWorld world = leadWorld();
+        if (world == null || this.cars.isEmpty()) {
+            return;
+        }
+        // Play from the lead entity so the sound tracks the moving train instead of staying pinned to where it fired.
+        world.playSoundFromEntity(null, this.cars.get(0), SoundEvents.ENTITY_MINECART_RIDING,
+            SoundCategory.NEUTRAL, 0.5f, pitch);
     }
 
     private void applyCarPositions() {
@@ -313,8 +363,7 @@ public final class Consist {
         double len = this.path.length();
         for (int i = 0; i < this.cars.size(); i++) {
             double arc = this.headArc - i * this.config.carSpacing;
-            // On a loop, followers wrap around the seam so the tail trails the
-            // lead across the join; on a line they simply clamp at the start.
+            // On a loop, followers wrap around the seam so the tail trails the lead across the join; on a line they clamp at the start.
             if (this.loop && len > 0.0) {
                 arc = ((arc % len) + len) % len;
             } else {
@@ -328,14 +377,11 @@ public final class Consist {
             car.setPitch(point.pitch());
             car.setPathYaw(point.yaw());
             car.setPathPitch(point.pitch());
-            // Report this tick's movement as velocity so the client carries a
-            // seated rider along with the car instead of leaving them trailing
-            // a few ticks behind the teleported position.
+            // Report this tick's movement as velocity so the client carries a seated rider along instead of leaving them a few ticks behind the teleported position.
             car.setVelocity(point.pos().subtract(previous));
             car.setArcLength((float) arc);
             car.setHudInfo(this.currentLine, this.currentDirection, nextName, waiting);
-            // Re-seat riders onto the car's new position this same tick, so they
-            // are never left a tick behind by the order entities happen to tick.
+            // Re-seat riders onto the car's new position this same tick, so entity tick order never leaves them a tick behind.
             for (Entity passenger : car.getPassengerList()) {
                 car.updatePassengerPosition(passenger);
             }
@@ -349,22 +395,20 @@ public final class Consist {
         }
     }
 
-    // Fires the arrival announcement for every bump the head has just passed,
-    // and rings the upcoming station's speaker so waiting passengers hear the
-    // train approaching — the bump is the station's linked "incoming" trigger.
+    // Fires the arrival announcement for every bump the head just passed and rings the upcoming station's speaker so waiting passengers hear the train approaching.
     private void fireCrossedBumps() {
         while (this.nextBumpIndex < this.bumps.size()
                 && this.headArc >= this.bumps.get(this.nextBumpIndex).arc()) {
             info.mudbourn.mmsmetro.path.PathBump bump = this.bumps.get(this.nextBumpIndex);
             setAnnouncement(buildAnnouncement(bump));
             playIncomingAtStation(bump.stationPos());
+            // Crossing the bump arms the ease-down for the station it heralds.
+            this.approachBraking = true;
             this.nextBumpIndex++;
         }
     }
 
-    // Plays the "train incoming" cue at the station's speaker (or the station
-    // block itself if none is placed nearby), so the sound comes from the
-    // platform ahead rather than from the moving train.
+    // Plays the "train incoming" cue at the station's speaker (or the station block if none is nearby), so it sounds from the platform ahead rather than the moving train.
     private void playIncomingAtStation(BlockPos station) {
         ServerWorld world = leadWorld();
         if (world == null || station == null) {
@@ -376,25 +420,28 @@ public final class Consist {
             ModSounds.TRAIN_INCOMING, SoundCategory.NEUTRAL, 1.0f, 1.0f);
     }
 
-    // The arrival line a bump announces, e.g.
-    //   "Arriving at: Central, exit will be on the left. Transfer for Blue Line."
-    //   "Arriving at: Depot, this is a terminal station. Exit on the right."
+    // The approaching cue a bump announces, in future tense, e.g. "Arriving at: Central, exit will be on the left. Transfer will be available for Blue Line."
     private static String buildAnnouncement(info.mudbourn.mmsmetro.path.PathBump bump) {
         String name = bump.stationName().isEmpty() ? "the next station" : bump.stationName();
         String exit = bump.exitDirection();
+        boolean trackSide = exit.equalsIgnoreCase("right");
         StringBuilder sb = new StringBuilder("Arriving at: ").append(name);
         if (bump.terminal()) {
-            sb.append(", this is a terminal station.");
-            if (!exit.isEmpty()) {
-                sb.append(" Exit on the ").append(exit).append('.');
+            sb.append(", this will be a terminal station.");
+            if (trackSide) {
+                sb.append(" Do not exit onto the tracks.");
+            } else if (!exit.isEmpty()) {
+                sb.append(" Exit will be on the ").append(exit).append('.');
             }
+        } else if (trackSide) {
+            sb.append(". Do not exit onto the tracks.");
         } else if (!exit.isEmpty()) {
             sb.append(", exit will be on the ").append(exit).append('.');
         } else {
             sb.append('.');
         }
         if (bump.hub() && !bump.transferLine().isEmpty()) {
-            sb.append(" Transfer for ").append(bump.transferLine()).append('.');
+            sb.append(" Transfer will be available for ").append(bump.transferLine()).append('.');
         }
         return sb.toString();
     }
@@ -408,10 +455,7 @@ public final class Consist {
         return this.bumps.size();
     }
 
-    // Turns the train around: rebuild the path from the current lead's rail
-    // heading back the way it came, flip the car order so the old tail leads,
-    // and re-seat every car onto the new path. Used at terminus stations and
-    // at dead ends so a train shuttles instead of parking forever.
+    // Turns the train around: rebuild the path back the way it came, flip the car order so the old tail leads, and re-seat every car; used at termini and dead ends so it shuttles instead of parking.
     private void reverse() {
         ServerWorld world = leadWorld();
         if (world == null || this.cars.isEmpty()) {
@@ -446,6 +490,7 @@ public final class Consist {
         this.headArc = Math.min((this.cars.size() - 1) * this.config.carSpacing, newPath.length());
         this.speed = 0.0;
         this.phase = Phase.RUNNING;
+        this.approachBraking = false;
         this.nextStationIndex = firstStationAhead(this.headArc);
         this.nextBumpIndex = firstBumpAhead(this.headArc);
         adoptIdentityFromNextStation();

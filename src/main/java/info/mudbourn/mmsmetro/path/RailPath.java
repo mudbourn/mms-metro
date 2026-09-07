@@ -2,6 +2,7 @@ package info.mudbourn.mmsmetro.path;
 
 import info.mudbourn.mmsmetro.block.SpeedBumpBlock;
 import info.mudbourn.mmsmetro.block.StationBlock;
+import info.mudbourn.mmsmetro.block.entity.SpeedBumpBlockEntity;
 import info.mudbourn.mmsmetro.block.entity.StationBlockEntity;
 import net.minecraft.block.AbstractRailBlock;
 import net.minecraft.block.BlockState;
@@ -17,8 +18,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-// An along-track polyline resolved by walking vanilla rails, with arc-length
-// sampling. Cars are positioned by distance along this path, never by guessing.
+// An along-track polyline resolved by walking vanilla rails, with arc-length sampling; cars are positioned by distance along this path, never by guessing.
 public final class RailPath {
 
     // Default cap on how far a path is walked from its origin, in rail nodes.
@@ -26,9 +26,7 @@ public final class RailPath {
 
     private final List<Vec3d> points;
 
-    // The rail block each node sits on, in path order — kept so the station and
-    // bump markers can be re-scanned against the world without rebuilding the
-    // geometry, which is what makes live station placement work.
+    // The rail block each node sits on, in path order, so markers can be re-scanned against the world without rebuilding the geometry (what makes live station placement work).
     private final List<BlockPos> nodes;
 
     private final double[] cumulative;
@@ -40,10 +38,7 @@ public final class RailPath {
 
     private final List<PathBump> bumps = new ArrayList<>();
 
-    // True when the walked track returned to its start node, so the path is a
-    // continuous loop the train circles rather than an out-and-back line it
-    // shuttles along. A loop's geometry carries a closing segment back to the
-    // start, so its arc-length spans the whole ring.
+    // True when the walked track returned to its start node: a continuous loop the train circles rather than an out-and-back line, its geometry carrying a closing segment so arc-length spans the whole ring.
     private final boolean loop;
 
     private RailPath(List<Vec3d> points, List<BlockPos> nodes,
@@ -63,8 +58,7 @@ public final class RailPath {
         return this.loop;
     }
 
-    // Rebuilds the station and bump lists from raw marks. Arc positions come from
-    // the fixed cumulative table, so re-running this never shifts the geometry.
+    // Rebuilds the station and bump lists from raw marks; arc positions come from the fixed cumulative table, so re-running never shifts the geometry.
     private void resolveMarks(List<StationMark> marks, List<BumpMark> bumpMarks) {
         this.stations.clear();
         for (StationMark mark : marks) {
@@ -76,8 +70,7 @@ public final class RailPath {
             }
         }
 
-        // Resolve each bump against the first station ahead of it: the bump only
-        // announces if there is a station further along to arrive at.
+        // Resolve each bump against the first matching station ahead of it; a bump only announces if there is a station further along to arrive at.
         this.bumps.clear();
         for (BumpMark bump : bumpMarks) {
             if (bump.nodeIndex >= this.cumulative.length) {
@@ -86,10 +79,15 @@ public final class RailPath {
             double arc = this.cumulative[bump.nodeIndex];
             PathStation ahead = null;
             for (PathStation station : this.stations) {
-                if (station.arc() > arc + 1.0e-3) {
-                    ahead = station;
-                    break;
+                if (station.arc() <= arc + 1.0e-3) {
+                    continue;
                 }
+                // A directed bump only heralds a stop on its own side, so a nearer opposite-direction platform never counts.
+                if (!bump.direction.isEmpty() && !bump.direction.equalsIgnoreCase(station.direction())) {
+                    continue;
+                }
+                ahead = station;
+                break;
             }
             if (ahead == null) {
                 continue;
@@ -99,9 +97,7 @@ public final class RailPath {
         }
     }
 
-    // Re-scans every node for station and bump blocks and rebuilds the marker
-    // lists, so stations placed (or removed) after the path was built register
-    // without respawning the train. Geometry and arc positions are unchanged.
+    // Re-scans every node for markers and rebuilds the lists, so stations placed or removed after the path was built register without respawning the train; geometry and arc positions are unchanged.
     public void refreshMarkers(World world) {
         List<StationMark> marks = new ArrayList<>();
         List<BumpMark> bumpMarks = new ArrayList<>();
@@ -109,8 +105,7 @@ public final class RailPath {
         resolveMarks(marks, bumpMarks);
     }
 
-    // Arc-length distance to the first station on this path, or +infinity if the
-    // path reaches no station. Used to steer a train toward the nearer station.
+    // Arc-length distance to the first station on this path, or +infinity if it reaches none; used to steer a train toward the nearer station.
     public double nearestStationArc() {
         return this.stations.isEmpty() ? Double.POSITIVE_INFINITY : this.stations.get(0).arc();
     }
@@ -136,7 +131,7 @@ public final class RailPath {
     }
 
     // A speed bump found at a node, before arc-lengths are known.
-    private record BumpMark(int nodeIndex, boolean terminus) {
+    private record BumpMark(int nodeIndex, boolean terminus, String direction) {
     }
 
     public PathPoint sample(double s) {
@@ -154,19 +149,12 @@ public final class RailPath {
         double segLength = this.cumulative[i + 1] - this.cumulative[i];
         double t = segLength > 1.0e-6 ? (clamped - this.cumulative[i]) / segLength : 0.0;
 
-        // Catmull-Rom through the four nodes around this segment: the curve still
-        // passes through every node but rounds the corners between them, and its
-        // tangent gives a heading that eases through turns instead of snapping.
-        Vec3d p0 = this.points.get(Math.max(0, i - 1));
         Vec3d p1 = this.points.get(i);
         Vec3d p2 = this.points.get(i + 1);
-        Vec3d p3 = this.points.get(Math.min(this.points.size() - 1, i + 2));
 
-        Vec3d pos = catmullRom(p0, p1, p2, p3, t);
-        Vec3d dir = catmullRomTangent(p0, p1, p2, p3, t);
-        if (dir.lengthSquared() < 1.0e-9) {
-            dir = p2.subtract(p1);
-        }
+        // Position follows the straight segment between rail block centers, so the train never cuts inside a corner and stays within the rail footprint.
+        Vec3d pos = p1.add(p2.subtract(p1).multiply(t));
+        Vec3d dir = normalizeOr(p2.subtract(p1), new Vec3d(0, 0, 1));
 
         float yaw = (float) Math.toDegrees(Math.atan2(-dir.x, dir.z));
         double horizontal = Math.sqrt(dir.x * dir.x + dir.z * dir.z);
@@ -174,35 +162,8 @@ public final class RailPath {
         return new PathPoint(pos, yaw, pitch);
     }
 
-    // Standard (uniform, tension 0.5) Catmull-Rom interpolation at t in [0,1].
-    private static Vec3d catmullRom(Vec3d p0, Vec3d p1, Vec3d p2, Vec3d p3, double t) {
-        double t2 = t * t;
-        double t3 = t2 * t;
-        double x = 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t
-            + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2
-            + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3);
-        double y = 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * t
-            + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2
-            + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3);
-        double z = 0.5 * ((2 * p1.z) + (-p0.z + p2.z) * t
-            + (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * t2
-            + (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * t3);
-        return new Vec3d(x, y, z);
-    }
-
-    // Derivative of the Catmull-Rom curve above, used as the heading tangent.
-    private static Vec3d catmullRomTangent(Vec3d p0, Vec3d p1, Vec3d p2, Vec3d p3, double t) {
-        double t2 = t * t;
-        double x = 0.5 * ((-p0.x + p2.x)
-            + 2 * (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t
-            + 3 * (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t2);
-        double y = 0.5 * ((-p0.y + p2.y)
-            + 2 * (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t
-            + 3 * (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t2);
-        double z = 0.5 * ((-p0.z + p2.z)
-            + 2 * (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * t
-            + 3 * (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * t2);
-        return new Vec3d(x, y, z);
+    private static Vec3d normalizeOr(Vec3d v, Vec3d fallback) {
+        return v.lengthSquared() < 1.0e-9 ? fallback : v.normalize();
     }
 
     public static RailPath build(World world, BlockPos start, Direction initialDir, int maxNodes) {
@@ -227,8 +188,7 @@ public final class RailPath {
             if (next == null) {
                 break;
             }
-            // Walking back onto the start node closes the ring: record the loop
-            // and stop before re-adding start, which is already node zero.
+            // Walking back onto the start node closes the ring: record the loop and stop before re-adding start, which is already node zero.
             if (next.equals(start) && n > 0) {
                 loop = true;
                 break;
@@ -253,10 +213,7 @@ public final class RailPath {
             travel = exit;
         }
 
-        // Close a loop's geometry with a final segment back to the start point so
-        // its arc-length covers the whole ring and sampling near the end eases
-        // into the start. Only the sampled polyline is closed, not the node list,
-        // so markers are still scanned once per real rail block.
+        // Close a loop's geometry with a final segment back to the start so arc-length covers the whole ring; only the sampled polyline is closed, not the node list, so markers are still scanned once per real rail block.
         if (loop && points.size() > 1) {
             points.add(points.get(0));
         }
@@ -265,12 +222,7 @@ public final class RailPath {
         return new RailPath(points, nodes, marks, bumpMarks, loop);
     }
 
-    // Scans every node's neighborhood for station and bump blocks, assigning
-    // each block to the single node it sits closest to. Nearest-node assignment
-    // (rather than first-node-wins) is what makes a train stop centred on the
-    // station: a block placed diagonally beside a node is also inside the
-    // previous node's scan box, so a greedy walk would claim it a node early and
-    // brake the train just short of the platform.
+    // Scans every node's neighborhood for markers, binding each block to the single closest node; nearest-node assignment (not first-node-wins) is what centres a train on the station rather than braking a node short of it.
     private static void scanMarks(World world, List<BlockPos> nodes,
                                   List<StationMark> outStations, List<BumpMark> outBumps) {
         int r = STATION_H_RADIUS;
@@ -298,7 +250,9 @@ public final class RailPath {
         for (Map.Entry<BlockPos, int[]> entry : bumpNode.entrySet()) {
             BlockPos pos = entry.getKey();
             boolean terminus = world.getBlockState(pos).get(SpeedBumpBlock.TERMINUS);
-            outBumps.add(new BumpMark(entry.getValue()[0], terminus));
+            String direction = world.getBlockEntity(pos) instanceof SpeedBumpBlockEntity bump
+                ? bump.getDirection() : "";
+            outBumps.add(new BumpMark(entry.getValue()[0], terminus, direction));
         }
     }
 
@@ -339,11 +293,7 @@ public final class RailPath {
             name, line, direction, nextStation, exitDirection, hub, transferLine);
     }
 
-    // How far a station or bump block may sit from a rail node and still count:
-    // one block out horizontally, and from two below to two above the rail. The
-    // primary placement is directly under the rail (the block the rail rests
-    // on), but a marker beside or on a platform above also counts. Each block is
-    // bound to the single nearest node so it is marked once, at the right stop.
+    // How far a marker may sit from a rail node and still count: one block out horizontally, two below to two above; primary placement is under the rail, but beside or on a platform above also counts, bound to the single nearest node.
     private static final int STATION_H_RADIUS = 1;
     private static final int STATION_UP = 2;
     private static final int STATION_DOWN = 2;

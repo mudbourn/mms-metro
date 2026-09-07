@@ -2,7 +2,6 @@
   "mms_metro.name": "MMS Metro",
   "itemGroup.mms_metro.metro": "MMS Metro",
   "block.mms_metro.station_block": "Station",
-  "block.mms_metro.metro_model_block": "Metro Car Model",
   "block.mms_metro.speaker_block": "Station Speaker",
   "block.mms_metro.speed_bump": "Speed Bump",
   "subtitles.mms_metro.train_incoming": "Train approaching",

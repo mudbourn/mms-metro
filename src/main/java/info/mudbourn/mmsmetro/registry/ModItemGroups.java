@@ -24,7 +24,6 @@ public final class ModItemGroups {
             .entries((context, entries) -> {
                 entries.add(ModItems.METRO_SPAWNER);
                 entries.add(ModBlocks.STATION);
-                entries.add(ModBlocks.METRO_MODEL);
                 entries.add(ModBlocks.SPEAKER);
                 entries.add(ModBlocks.SPEED_BUMP);
             })
