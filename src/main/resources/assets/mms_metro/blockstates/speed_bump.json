@@ -1,6 +1,5 @@
 {
   "variants": {
-    "enabled=false": { "model": "mms_metro:block/speed_bump" },
-    "enabled=true":  { "model": "mms_metro:block/speed_bump" }
+    "": { "model": "mms_metro:block/speed_bump" }
   }
 }

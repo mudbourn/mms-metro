@@ -93,7 +93,7 @@ public final class RailPath {
                 continue;
             }
             this.bumps.add(new PathBump(arc, ahead.pos(), ahead.name(), ahead.exitDirection(),
-                ahead.hub(), ahead.transferLine(), bump.terminus || ahead.terminus()));
+                ahead.hub(), ahead.transferLine(), ahead.terminus()));
         }
     }
 
@@ -131,7 +131,7 @@ public final class RailPath {
     }
 
     // A speed bump found at a node, before arc-lengths are known.
-    private record BumpMark(int nodeIndex, boolean terminus, String direction) {
+    private record BumpMark(int nodeIndex, String direction) {
     }
 
     public PathPoint sample(double s) {
@@ -249,10 +249,9 @@ public final class RailPath {
         }
         for (Map.Entry<BlockPos, int[]> entry : bumpNode.entrySet()) {
             BlockPos pos = entry.getKey();
-            boolean terminus = world.getBlockState(pos).get(SpeedBumpBlock.TERMINUS);
             String direction = world.getBlockEntity(pos) instanceof SpeedBumpBlockEntity bump
                 ? bump.getDirection() : "";
-            outBumps.add(new BumpMark(entry.getValue()[0], terminus, direction));
+            outBumps.add(new BumpMark(entry.getValue()[0], direction));
         }
     }
 

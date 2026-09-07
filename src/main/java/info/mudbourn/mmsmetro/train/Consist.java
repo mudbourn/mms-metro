@@ -280,34 +280,35 @@ public final class Consist {
         if (!station.direction().isEmpty()) {
             this.currentDirection = station.direction();
         }
-        // The stop block takes over from the bump's arriving cue with this station's exit and transfer detail.
+        // Stopped at the platform: show where the exits are on this stop.
         setAnnouncement(buildStopAnnouncement(station));
     }
 
-    // The onboard line shown while dwelling: terminal notice, transfer, and which way the exits lie.
+    // The arrived cue shown while stopped: a terminal notice and which way the exits lie.
     private static String buildStopAnnouncement(PathStation station) {
         String exit = station.exitDirection();
-        boolean trackSide = exit.equalsIgnoreCase("right");
-        StringBuilder sb = new StringBuilder();
         if (station.terminus()) {
-            sb.append("This is a terminal station.");
-            if (trackSide) {
-                sb.append(" Do not exit onto the tracks.");
-            } else if (!exit.isEmpty()) {
+            StringBuilder sb = new StringBuilder("This is a terminal station.");
+            if (!exit.isEmpty()) {
                 sb.append(" Exit on the ").append(exit).append(", please.");
             }
-        } else if (station.hub() && !station.transferLine().isEmpty()) {
-            sb.append("Transfer for ").append(station.transferLine()).append('.');
-            if (trackSide) {
-                sb.append(" Do not exit onto the tracks.");
-            } else if (!exit.isEmpty()) {
-                sb.append(" Exits are on the ").append(exit).append('.');
-            }
-        } else if (trackSide) {
-            sb.append("Do not exit onto the tracks.");
-        } else if (!exit.isEmpty()) {
-            sb.append("Exits are on the ").append(exit).append('.');
+            return sb.toString();
         }
+        return exit.isEmpty() ? "" : "Exits are on the " + exit + ".";
+    }
+
+    // The departing cue: the next stop, its transfer if any, and the track-safety warning.
+    private String buildDepartAnnouncement() {
+        PathStation next = nextStation();
+        StringBuilder sb = new StringBuilder();
+        if (next != null && !next.name().isEmpty()) {
+            sb.append("Next stop: ").append(next.name()).append('.');
+            if (next.hub() && !next.transferLine().isEmpty()) {
+                sb.append(" Transfer for ").append(next.transferLine()).append('.');
+            }
+            sb.append(' ');
+        }
+        sb.append("Please do not exit onto the tracks.");
         return sb.toString();
     }
 
@@ -334,6 +335,8 @@ public final class Consist {
         } else {
             this.nextStationIndex++;
         }
+        // Pulling out: announce the next stop, its transfer, and the track warning.
+        setAnnouncement(buildDepartAnnouncement());
     }
 
     private void tickRolling() {
@@ -420,28 +423,20 @@ public final class Consist {
             ModSounds.TRAIN_INCOMING, SoundCategory.NEUTRAL, 1.0f, 1.0f);
     }
 
-    // The approaching cue a bump announces, in future tense, e.g. "Arriving at: Central, exit will be on the left. Transfer will be available for Blue Line."
+    // The approaching cue a bump announces, in future tense, showing where the exits will be, e.g. "Arriving at: Central, exit will be on the left."
     private static String buildAnnouncement(info.mudbourn.mmsmetro.path.PathBump bump) {
         String name = bump.stationName().isEmpty() ? "the next station" : bump.stationName();
         String exit = bump.exitDirection();
-        boolean trackSide = exit.equalsIgnoreCase("right");
         StringBuilder sb = new StringBuilder("Arriving at: ").append(name);
         if (bump.terminal()) {
             sb.append(", this will be a terminal station.");
-            if (trackSide) {
-                sb.append(" Do not exit onto the tracks.");
-            } else if (!exit.isEmpty()) {
+            if (!exit.isEmpty()) {
                 sb.append(" Exit will be on the ").append(exit).append('.');
             }
-        } else if (trackSide) {
-            sb.append(". Do not exit onto the tracks.");
         } else if (!exit.isEmpty()) {
             sb.append(", exit will be on the ").append(exit).append('.');
         } else {
             sb.append('.');
-        }
-        if (bump.hub() && !bump.transferLine().isEmpty()) {
-            sb.append(" Transfer will be available for ").append(bump.transferLine()).append('.');
         }
         return sb.toString();
     }

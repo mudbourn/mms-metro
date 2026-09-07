@@ -6,7 +6,6 @@ import info.mudbourn.mmsmetro.block.entity.SpeedBumpBlockEntity;
 import info.mudbourn.mmsmetro.block.entity.StationBlockEntity;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
-import net.minecraft.block.BlockState;
 import net.minecraft.network.RegistryByteBuf;
 import net.minecraft.network.codec.PacketCodec;
 import net.minecraft.network.packet.CustomPayload;
@@ -83,16 +82,15 @@ public final class MetroNetworking {
     }
 
     // Server->client: open the speed-bump editor.
-    public record OpenBumpScreen(BlockPos pos, boolean terminus, String direction) implements CustomPayload {
+    public record OpenBumpScreen(BlockPos pos, String direction) implements CustomPayload {
         public static final Id<OpenBumpScreen> ID =
             new Id<>(Identifier.of(MmsMetro.MOD_ID, "open_bump"));
         public static final PacketCodec<RegistryByteBuf, OpenBumpScreen> CODEC = PacketCodec.of(
             (v, buf) -> {
                 buf.writeBlockPos(v.pos);
-                buf.writeBoolean(v.terminus);
                 buf.writeString(v.direction);
             },
-            buf -> new OpenBumpScreen(buf.readBlockPos(), buf.readBoolean(), buf.readString()));
+            buf -> new OpenBumpScreen(buf.readBlockPos(), buf.readString()));
 
         @Override
         public Id<? extends CustomPayload> getId() {
@@ -101,16 +99,15 @@ public final class MetroNetworking {
     }
 
     // Client->server: apply the edited speed-bump values.
-    public record BumpEdit(BlockPos pos, boolean terminus, String direction) implements CustomPayload {
+    public record BumpEdit(BlockPos pos, String direction) implements CustomPayload {
         public static final Id<BumpEdit> ID =
             new Id<>(Identifier.of(MmsMetro.MOD_ID, "bump_edit"));
         public static final PacketCodec<RegistryByteBuf, BumpEdit> CODEC = PacketCodec.of(
             (v, buf) -> {
                 buf.writeBlockPos(v.pos);
-                buf.writeBoolean(v.terminus);
                 buf.writeString(v.direction);
             },
-            buf -> new BumpEdit(buf.readBlockPos(), buf.readBoolean(), buf.readString()));
+            buf -> new BumpEdit(buf.readBlockPos(), buf.readString()));
 
         @Override
         public Id<? extends CustomPayload> getId() {
@@ -144,8 +141,8 @@ public final class MetroNetworking {
     }
 
     // Sends the speed-bump editor to a player looking at a bump block.
-    public static void openBump(ServerPlayerEntity player, BlockPos pos, boolean terminus, String direction) {
-        ServerPlayNetworking.send(player, new OpenBumpScreen(pos, terminus, direction));
+    public static void openBump(ServerPlayerEntity player, BlockPos pos, String direction) {
+        ServerPlayNetworking.send(player, new OpenBumpScreen(pos, direction));
     }
 
     private static void applyStation(ServerPlayerEntity player, StationEdit edit) {
@@ -171,12 +168,9 @@ public final class MetroNetworking {
         if (!canEdit(player, edit.pos())) {
             return;
         }
-        BlockState state = world.getBlockState(edit.pos());
-        if (state.getBlock() instanceof SpeedBumpBlock) {
-            world.setBlockState(edit.pos(), state.with(SpeedBumpBlock.TERMINUS, edit.terminus()));
-            if (world.getBlockEntity(edit.pos()) instanceof SpeedBumpBlockEntity bump) {
-                bump.setDirection(edit.direction());
-            }
+        if (world.getBlockState(edit.pos()).getBlock() instanceof SpeedBumpBlock
+            && world.getBlockEntity(edit.pos()) instanceof SpeedBumpBlockEntity bump) {
+            bump.setDirection(edit.direction());
         }
     }
 
