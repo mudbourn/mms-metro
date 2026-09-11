@@ -320,7 +320,7 @@ public final class Consist {
         if (next != null && next.hub() && !next.transferLine().isEmpty()) {
             sb.append("Transfer for ").append(next.transferLine()).append(". ");
         }
-        sb.append("Please remain seated as the train departs.");
+        sb.append("Please remain seated while the train is in motion.");
         return sb.toString();
     }
 

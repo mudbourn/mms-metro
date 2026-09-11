@@ -16,10 +16,8 @@ import net.minecraft.world.World;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 // An along-track polyline resolved by walking vanilla rails, with arc-length sampling; cars are positioned by distance along this path, never by guessing.
 public final class RailPath {
@@ -60,6 +58,12 @@ public final class RailPath {
         this.loopStartArc = loop && loopStartIndex > 0 && loopStartIndex < this.cumulative.length
             ? this.cumulative[loopStartIndex] : 0.0;
         resolveMarks(marks, bumpMarks);
+        info.mudbourn.mmsmetro.MmsMetro.LOGGER.info(
+            "[junction] path loop={} length={} loopStartArc={}", loop, this.length, this.loopStartArc);
+        for (PathStation s : this.stations) {
+            info.mudbourn.mmsmetro.MmsMetro.LOGGER.info(
+                "[junction]   station '{}' arc={} terminus={}", s.name(), s.arc(), s.terminus());
+        }
     }
 
     public boolean isLoop() {
@@ -82,6 +86,8 @@ public final class RailPath {
                     mark.exitDirection, mark.hub, mark.transferLine, mark.lineColor));
             }
         }
+        // Order by arc so the consist can step through stops along the path; one block passed twice yields two stops out of scan order, so sorting is what keeps them in travel order.
+        this.stations.sort((a, b) -> Double.compare(a.arc(), b.arc()));
 
         // Resolve each bump against the first matching station ahead of it; a bump only announces if there is a station further along to arrive at.
         this.bumps.clear();
@@ -199,41 +205,33 @@ public final class RailPath {
             return new RailPath(points, nodes, marks, bumpMarks, false, 0);
         }
 
+        info.mudbourn.mmsmetro.MmsMetro.LOGGER.info(
+            "[junction] build start {} shape {} initialDir {}", start, startShape, initialDir);
         points.add(centerPoint(start, startShape));
         nodes.add(start.toImmutable());
-        Set<BlockPos> visited = new HashSet<>();
-        visited.add(start.toImmutable());
         Direction travel = pickExit(startShape, initialDir);
+        // Keyed by node plus the heading the walk leaves it on, not node alone, so a junction crossed twice on different headings is a legitimate crossing rather than a premature loop; the value is the node's first index for closing the ring.
+        Map<String, Integer> stateIndex = new HashMap<>();
+        stateIndex.put(stateKey(start, travel), 0);
         BlockPos current = start;
         RailShape currentShape = startShape;
         boolean loop = false;
         int loopStartIndex = 0;
+        String endReason = "maxNodes";
 
         for (int n = 0; n < maxNodes; n++) {
             BlockPos next = step(world, current, currentShape, travel);
             if (next == null) {
-                break;
-            }
-            // Walking back onto the start node closes the ring: record the loop and stop before re-adding start, which is already node zero.
-            if (next.equals(start) && n > 0) {
-                loop = true;
-                break;
-            }
-            // Rejoining any other already-walked node means a spur fed into a ring; close the loop at that rejoin node so the ring circles forever and the lead-in is ridden only once.
-            if (visited.contains(next)) {
-                loop = true;
-                loopStartIndex = nodes.indexOf(next);
+                endReason = "no rail " + travel + " of " + current;
                 break;
             }
 
             RailShape nextShape = railShape(world, next);
             if (nextShape == null) {
+                endReason = "not a rail at " + next;
                 break;
             }
 
-            points.add(centerPoint(next, nextShape));
-            nodes.add(next.toImmutable());
-            visited.add(next.toImmutable());
             // A junction block under the node overrides the greedy follow, routing by the direction the train arrived on so arrival and departure tracks stay separate; without one the walk picks the straightest exit.
             Direction exit = junctionExit(world, next, travel);
             if (exit == null) {
@@ -241,6 +239,20 @@ public final class RailPath {
                 Direction[] conns = connections(nextShape);
                 exit = dot(conns[0], travel) >= dot(conns[1], travel) ? conns[0] : conns[1];
             }
+
+            // Re-entering a node on the same exit heading repeats the whole future: that is the ring closing, so stop before re-adding it and fold the geometry back to where the state first occurred.
+            String key = stateKey(next, exit);
+            Integer seen = stateIndex.get(key);
+            if (seen != null) {
+                loop = true;
+                loopStartIndex = seen;
+                endReason = "loop at " + next + " heading " + exit;
+                break;
+            }
+
+            points.add(centerPoint(next, nextShape));
+            nodes.add(next.toImmutable());
+            stateIndex.put(key, nodes.size() - 1);
 
             current = next;
             currentShape = nextShape;
@@ -252,18 +264,22 @@ public final class RailPath {
             points.add(points.get(loopStartIndex));
         }
 
+        info.mudbourn.mmsmetro.MmsMetro.LOGGER.info(
+            "[junction] build end: {} nodes, last {}, reason {}",
+            nodes.size(), nodes.isEmpty() ? "none" : nodes.get(nodes.size() - 1), endReason);
         scanMarks(world, nodes, marks, bumpMarks);
         return new RailPath(points, nodes, marks, bumpMarks, loop, loopStartIndex);
     }
 
-    // Scans every node's neighborhood for markers, binding each block to the single closest node; nearest-node assignment (not first-node-wins) is what centres a train on the station rather than braking a node short of it.
+    // A run of node indices more than this far apart counts as a separate pass of the track past one marker, so a route that visits a block twice (an out-and-back stub, or a junction crossed on two headings) stops there on each pass.
+    private static final int PASS_GAP = 8;
+
+    // Scans every node's neighborhood for markers, then binds one stop per pass of the track: the nearest node within each run of nearby indices, so a block the route passes twice is served twice rather than pinned to a single arc.
     private static void scanMarks(World world, List<BlockPos> nodes,
                                   List<StationMark> outStations, List<BumpMark> outBumps) {
         int r = BUMP_H_RADIUS;
-        Map<BlockPos, int[]> stationNode = new java.util.LinkedHashMap<>();
-        Map<BlockPos, Double> stationDist = new HashMap<>();
-        Map<BlockPos, int[]> bumpNode = new java.util.LinkedHashMap<>();
-        Map<BlockPos, Double> bumpDist = new HashMap<>();
+        Map<BlockPos, List<double[]>> stationHits = new java.util.LinkedHashMap<>();
+        Map<BlockPos, List<double[]>> bumpHits = new java.util.LinkedHashMap<>();
 
         for (int i = 0; i < nodes.size(); i++) {
             BlockPos rail = nodes.get(i);
@@ -272,32 +288,52 @@ public final class RailPath {
                 double sq = pos.getSquaredDistance(rail);
                 int hOffset = Math.max(Math.abs(pos.getX() - rail.getX()), Math.abs(pos.getZ() - rail.getZ()));
                 if (hOffset <= STATION_H_RADIUS && world.getBlockState(pos).getBlock() instanceof StationBlock) {
-                    considerClosest(pos.toImmutable(), i, sq, stationNode, stationDist);
+                    stationHits.computeIfAbsent(pos.toImmutable(), p -> new ArrayList<>()).add(new double[]{i, sq});
                 } else if (world.getBlockState(pos).getBlock() instanceof SpeedBumpBlock) {
-                    considerClosest(pos.toImmutable(), i, sq, bumpNode, bumpDist);
+                    bumpHits.computeIfAbsent(pos.toImmutable(), p -> new ArrayList<>()).add(new double[]{i, sq});
                 }
             }
         }
 
-        for (Map.Entry<BlockPos, int[]> entry : stationNode.entrySet()) {
-            outStations.add(readStationMark(world, entry.getKey(), entry.getValue()[0]));
+        for (Map.Entry<BlockPos, List<double[]>> entry : stationHits.entrySet()) {
+            for (int nodeIndex : nearestPerPass(entry.getValue())) {
+                outStations.add(readStationMark(world, entry.getKey(), nodeIndex));
+            }
         }
-        for (Map.Entry<BlockPos, int[]> entry : bumpNode.entrySet()) {
+        for (Map.Entry<BlockPos, List<double[]>> entry : bumpHits.entrySet()) {
             BlockPos pos = entry.getKey();
             String direction = world.getBlockEntity(pos) instanceof SpeedBumpBlockEntity bump
                 ? bump.getDirection() : "";
-            outBumps.add(new BumpMark(entry.getValue()[0], direction));
+            for (int nodeIndex : nearestPerPass(entry.getValue())) {
+                outBumps.add(new BumpMark(nodeIndex, direction));
+            }
         }
     }
 
-    // Keeps, for one marker block, the nearest node seen so far.
-    private static void considerClosest(BlockPos pos, int nodeIndex, double sq,
-                                        Map<BlockPos, int[]> node, Map<BlockPos, Double> dist) {
-        Double best = dist.get(pos);
-        if (best == null || sq < best) {
-            dist.put(pos, sq);
-            node.put(pos, new int[]{nodeIndex});
+    // Splits one marker's hits into passes (runs of node indices no more than PASS_GAP apart) and returns the nearest node of each, so the marker binds once per time the track goes by it.
+    private static List<Integer> nearestPerPass(List<double[]> hits) {
+        hits.sort((a, b) -> Integer.compare((int) a[0], (int) b[0]));
+        List<Integer> result = new ArrayList<>();
+        int bestNode = -1;
+        double bestSq = Double.MAX_VALUE;
+        int prevNode = Integer.MIN_VALUE;
+        for (double[] hit : hits) {
+            int nodeIndex = (int) hit[0];
+            if (nodeIndex - prevNode > PASS_GAP && bestNode >= 0) {
+                result.add(bestNode);
+                bestNode = -1;
+                bestSq = Double.MAX_VALUE;
+            }
+            if (hit[1] < bestSq) {
+                bestSq = hit[1];
+                bestNode = nodeIndex;
+            }
+            prevNode = nodeIndex;
         }
+        if (bestNode >= 0) {
+            result.add(bestNode);
+        }
+        return result;
     }
 
     // Reads a station block's settings into a mark bound to its nearest node.
@@ -337,11 +373,19 @@ public final class RailPath {
     // Speed bumps reach four blocks out to either side of the track so a train at high speed never overshoots the node the bump binds to.
     private static final int BUMP_H_RADIUS = 4;
 
+    // A walk-state identity: a node together with the heading the walk departs it on, so the loop closes only when the whole future would repeat.
+    private static String stateKey(BlockPos pos, Direction heading) {
+        return pos.getX() + "," + pos.getY() + "," + pos.getZ() + "," + heading;
+    }
+
     // The exit a junction block under this node dictates for a train arriving on the given heading, or null when there is no junction or it leaves that heading unrouted.
     private static Direction junctionExit(World world, BlockPos node, Direction travel) {
         BlockEntity be = world.getBlockEntity(node.down());
         if (be instanceof JunctionBlockEntity junction) {
-            return junction.getExit(travel);
+            Direction exit = junction.getExit(travel);
+            info.mudbourn.mmsmetro.MmsMetro.LOGGER.info(
+                "[junction] at {} train heading {} -> exit {}", node.down(), travel, exit);
+            return exit;
         }
         return null;
     }

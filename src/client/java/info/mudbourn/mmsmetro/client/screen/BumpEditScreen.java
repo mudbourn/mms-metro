@@ -2,10 +2,10 @@ package info.mudbourn.mmsmetro.client.screen;
 
 import info.mudbourn.mmsmetro.network.MetroNetworking;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
-import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
+import net.minecraft.client.gui.widget.TextWidget;
 import net.minecraft.text.Text;
 
 // The speed-bump editor: a single direction that must match the stop it heralds, so a bump only announces platforms on its own side of the track.
@@ -27,6 +27,12 @@ public class BumpEditScreen extends Screen {
         int cx = this.width / 2;
         int top = this.height / 2 - 20;
 
+        int titleWidth = this.textRenderer.getWidth(this.title);
+        this.addDrawableChild(new TextWidget((this.width - titleWidth) / 2, top - 34, titleWidth, 9,
+            this.title, this.textRenderer));
+        this.addDrawableChild(new TextWidget(cx - FIELD_WIDTH / 2, top - 10, FIELD_WIDTH, 9,
+            Text.literal("Direction"), this.textRenderer));
+
         this.directionField = new TextFieldWidget(this.textRenderer, cx - FIELD_WIDTH / 2, top,
             FIELD_WIDTH, FIELD_HEIGHT, Text.empty());
         this.directionField.setMaxLength(64);
@@ -43,14 +49,6 @@ public class BumpEditScreen extends Screen {
     private void save() {
         ClientPlayNetworking.send(new MetroNetworking.BumpEdit(this.data.pos(), this.directionField.getText()));
         this.close();
-    }
-
-    @Override
-    public void render(DrawContext context, int mouseX, int mouseY, float delta) {
-        super.render(context, mouseX, mouseY, delta);
-        context.drawCenteredTextWithShadow(this.textRenderer, this.title, this.width / 2, this.height / 2 - 50, 0xFFFFFF);
-        context.drawTextWithShadow(this.textRenderer, Text.literal("Direction"),
-            this.directionField.getX(), this.directionField.getY() - 10, 0xA0A0A0);
     }
 
     @Override

@@ -2,11 +2,11 @@ package info.mudbourn.mmsmetro.client.screen;
 
 import info.mudbourn.mmsmetro.network.MetroNetworking;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
-import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.CyclingButtonWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
+import net.minecraft.client.gui.widget.TextWidget;
 import net.minecraft.text.Text;
 import net.minecraft.util.DyeColor;
 import net.minecraft.util.math.BlockPos;
@@ -49,14 +49,18 @@ public class StationEditScreen extends Screen {
         int contentHeight = ROW_SPACING * 5 + 28;
         int top = Math.max(30, (this.height - contentHeight) / 2 + 10);
 
-        this.nameField = labeledField(leftX, top, this.data.name(), 64, "e.g. Central");
-        this.lineField = labeledField(leftX, top + ROW_SPACING, this.data.line(), 64, "e.g. Red Line");
-        this.directionField = labeledField(leftX, top + ROW_SPACING * 2, this.data.direction(), 64, "e.g. Northbound");
-        this.nextField = labeledField(leftX, top + ROW_SPACING * 3, this.data.next(), 64, "next station name");
+        int titleWidth = this.textRenderer.getWidth(this.title);
+        this.addDrawableChild(new TextWidget((this.width - titleWidth) / 2, top - 24, titleWidth, 9,
+            this.title, this.textRenderer));
 
-        this.exitField = labeledField(rightX, top, this.data.exit(), 32, "left / right / both");
-        this.transferField = labeledField(rightX, top + ROW_SPACING, this.data.transfer(), 64, "line to transfer to");
-        this.dwellField = labeledField(rightX, top + ROW_SPACING * 2, Integer.toString(this.data.dwell()), 6, "e.g. 60");
+        this.nameField = labeledField(leftX, top, "Station name", this.data.name(), 64, "e.g. Central");
+        this.lineField = labeledField(leftX, top + ROW_SPACING, "Line", this.data.line(), 64, "e.g. Red Line");
+        this.directionField = labeledField(leftX, top + ROW_SPACING * 2, "Direction", this.data.direction(), 64, "e.g. Northbound");
+        this.nextField = labeledField(leftX, top + ROW_SPACING * 3, "Next stop", this.data.next(), 64, "next station name");
+
+        this.exitField = labeledField(rightX, top, "Exit side (left/right/both)", this.data.exit(), 32, "left / right / both");
+        this.transferField = labeledField(rightX, top + ROW_SPACING, "Transfer line", this.data.transfer(), 64, "line to transfer to");
+        this.dwellField = labeledField(rightX, top + ROW_SPACING * 2, "Dwell (ticks)", Integer.toString(this.data.dwell()), 6, "e.g. 60");
 
         int toggleY = top + ROW_SPACING * 3;
         this.hubButton = ButtonWidget.builder(hubMessage(), b -> {
@@ -88,7 +92,8 @@ public class StationEditScreen extends Screen {
             .dimensions(this.width / 2 + 4, bottom, 150, 20).build());
     }
 
-    private TextFieldWidget labeledField(int x, int y, String value, int maxLength, String placeholder) {
+    private TextFieldWidget labeledField(int x, int y, String label, String value, int maxLength, String placeholder) {
+        this.addDrawableChild(new TextWidget(x, y - 10, FIELD_WIDTH, 9, Text.literal(label), this.textRenderer));
         TextFieldWidget field = new TextFieldWidget(this.textRenderer, x, y, FIELD_WIDTH, FIELD_HEIGHT, Text.empty());
         field.setMaxLength(maxLength);
         field.setPlaceholder(Text.literal(placeholder));
@@ -133,25 +138,6 @@ public class StationEditScreen extends Screen {
             this.nextField.getText(), this.exitField.getText(), this.transferField.getText(),
             this.hub, this.terminus, dwell));
         this.close();
-    }
-
-    @Override
-    public void render(DrawContext context, int mouseX, int mouseY, float delta) {
-        super.render(context, mouseX, mouseY, delta);
-        context.drawCenteredTextWithShadow(this.textRenderer, this.title, this.width / 2, 20, 0xFFFFFF);
-        // Field captions sit just above each box.
-        drawLabel(context, this.nameField, "Station name");
-        drawLabel(context, this.lineField, "Line");
-        drawLabel(context, this.directionField, "Direction");
-        drawLabel(context, this.nextField, "Next stop");
-        drawLabel(context, this.exitField, "Exit side (left/right/both)");
-        drawLabel(context, this.transferField, "Transfer line");
-        drawLabel(context, this.dwellField, "Dwell (ticks)");
-    }
-
-    private void drawLabel(DrawContext context, TextFieldWidget field, String label) {
-        context.drawTextWithShadow(this.textRenderer, Text.literal(label),
-            field.getX(), field.getY() - 10, 0xA0A0A0);
     }
 
     @Override
