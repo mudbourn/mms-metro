@@ -2,6 +2,7 @@ package info.mudbourn.mmsmetro.path;
 
 import info.mudbourn.mmsmetro.block.SpeedBumpBlock;
 import info.mudbourn.mmsmetro.block.StationBlock;
+import info.mudbourn.mmsmetro.block.entity.JunctionBlockEntity;
 import info.mudbourn.mmsmetro.block.entity.SpeedBumpBlockEntity;
 import info.mudbourn.mmsmetro.block.entity.StationBlockEntity;
 import net.minecraft.block.AbstractRailBlock;
@@ -15,8 +16,10 @@ import net.minecraft.world.World;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 // An along-track polyline resolved by walking vanilla rails, with arc-length sampling; cars are positioned by distance along this path, never by guessing.
 public final class RailPath {
@@ -41,8 +44,11 @@ public final class RailPath {
     // True when the walked track returned to its start node: a continuous loop the train circles rather than an out-and-back line, its geometry carrying a closing segment so arc-length spans the whole ring.
     private final boolean loop;
 
+    // Arc the loop folds back to when the head passes the end: zero for a ring closed at its start, the rejoin node's arc for a spur that feeds into a ring, so the lead-in spur is ridden once and the ring circled forever after.
+    private final double loopStartArc;
+
     private RailPath(List<Vec3d> points, List<BlockPos> nodes,
-                    List<StationMark> marks, List<BumpMark> bumpMarks, boolean loop) {
+                    List<StationMark> marks, List<BumpMark> bumpMarks, boolean loop, int loopStartIndex) {
         this.points = points;
         this.nodes = nodes;
         this.loop = loop;
@@ -51,11 +57,18 @@ public final class RailPath {
             this.cumulative[i] = this.cumulative[i - 1] + points.get(i - 1).distanceTo(points.get(i));
         }
         this.length = points.size() < 2 ? 0.0 : this.cumulative[points.size() - 1];
+        this.loopStartArc = loop && loopStartIndex > 0 && loopStartIndex < this.cumulative.length
+            ? this.cumulative[loopStartIndex] : 0.0;
         resolveMarks(marks, bumpMarks);
     }
 
     public boolean isLoop() {
         return this.loop;
+    }
+
+    // Arc the head returns to after crossing the seam; the ring is the span from here to length().
+    public double loopStartArc() {
+        return this.loopStartArc;
     }
 
     // Rebuilds the station and bump lists from raw marks; arc positions come from the fixed cumulative table, so re-running never shifts the geometry.
@@ -88,6 +101,16 @@ public final class RailPath {
                 }
                 ahead = station;
                 break;
+            }
+            // On a ring a bump past the last station heralds the first station across the seam, so wrap to the start rather than dropping it.
+            if (ahead == null && this.loop) {
+                for (PathStation station : this.stations) {
+                    if (!bump.direction.isEmpty() && !bump.direction.equalsIgnoreCase(station.direction())) {
+                        continue;
+                    }
+                    ahead = station;
+                    break;
+                }
             }
             if (ahead == null) {
                 continue;
@@ -173,15 +196,18 @@ public final class RailPath {
         List<BumpMark> bumpMarks = new ArrayList<>();
         RailShape startShape = railShape(world, start);
         if (startShape == null) {
-            return new RailPath(points, nodes, marks, bumpMarks, false);
+            return new RailPath(points, nodes, marks, bumpMarks, false, 0);
         }
 
         points.add(centerPoint(start, startShape));
         nodes.add(start.toImmutable());
+        Set<BlockPos> visited = new HashSet<>();
+        visited.add(start.toImmutable());
         Direction travel = pickExit(startShape, initialDir);
         BlockPos current = start;
         RailShape currentShape = startShape;
         boolean loop = false;
+        int loopStartIndex = 0;
 
         for (int n = 0; n < maxNodes; n++) {
             BlockPos next = step(world, current, currentShape, travel);
@@ -193,6 +219,12 @@ public final class RailPath {
                 loop = true;
                 break;
             }
+            // Rejoining any other already-walked node means a spur fed into a ring; close the loop at that rejoin node so the ring circles forever and the lead-in is ridden only once.
+            if (visited.contains(next)) {
+                loop = true;
+                loopStartIndex = nodes.indexOf(next);
+                break;
+            }
 
             RailShape nextShape = railShape(world, next);
             if (nextShape == null) {
@@ -201,11 +233,13 @@ public final class RailPath {
 
             points.add(centerPoint(next, nextShape));
             nodes.add(next.toImmutable());
-            Direction entered = travel.getOpposite();
-            Direction[] conns = connections(nextShape);
-            Direction exit = conns[0] == entered ? conns[1] : (conns[1] == entered ? conns[0] : null);
+            visited.add(next.toImmutable());
+            // A junction block under the node overrides the greedy follow, routing by the direction the train arrived on so arrival and departure tracks stay separate; without one the walk picks the straightest exit.
+            Direction exit = junctionExit(world, next, travel);
             if (exit == null) {
-                break;
+                // Vanilla routes a cart along the rail's two ends, taking the end its heading points toward (DefaultMinecartController.moveOnRail), never requiring a matching entry side; replicate that so curves entered from the open side round instead of dead-ending.
+                Direction[] conns = connections(nextShape);
+                exit = dot(conns[0], travel) >= dot(conns[1], travel) ? conns[0] : conns[1];
             }
 
             current = next;
@@ -213,19 +247,19 @@ public final class RailPath {
             travel = exit;
         }
 
-        // Close a loop's geometry with a final segment back to the start so arc-length covers the whole ring; only the sampled polyline is closed, not the node list, so markers are still scanned once per real rail block.
+        // Close a loop's geometry with a final segment back to the rejoin node so arc-length covers the whole ring; only the sampled polyline is closed, not the node list, so markers are still scanned once per real rail block.
         if (loop && points.size() > 1) {
-            points.add(points.get(0));
+            points.add(points.get(loopStartIndex));
         }
 
         scanMarks(world, nodes, marks, bumpMarks);
-        return new RailPath(points, nodes, marks, bumpMarks, loop);
+        return new RailPath(points, nodes, marks, bumpMarks, loop, loopStartIndex);
     }
 
     // Scans every node's neighborhood for markers, binding each block to the single closest node; nearest-node assignment (not first-node-wins) is what centres a train on the station rather than braking a node short of it.
     private static void scanMarks(World world, List<BlockPos> nodes,
                                   List<StationMark> outStations, List<BumpMark> outBumps) {
-        int r = STATION_H_RADIUS;
+        int r = BUMP_H_RADIUS;
         Map<BlockPos, int[]> stationNode = new java.util.LinkedHashMap<>();
         Map<BlockPos, Double> stationDist = new HashMap<>();
         Map<BlockPos, int[]> bumpNode = new java.util.LinkedHashMap<>();
@@ -236,7 +270,8 @@ public final class RailPath {
             for (BlockPos pos : BlockPos.iterate(
                     rail.add(-r, -STATION_DOWN, -r), rail.add(r, STATION_UP, r))) {
                 double sq = pos.getSquaredDistance(rail);
-                if (world.getBlockState(pos).getBlock() instanceof StationBlock) {
+                int hOffset = Math.max(Math.abs(pos.getX() - rail.getX()), Math.abs(pos.getZ() - rail.getZ()));
+                if (hOffset <= STATION_H_RADIUS && world.getBlockState(pos).getBlock() instanceof StationBlock) {
                     considerClosest(pos.toImmutable(), i, sq, stationNode, stationDist);
                 } else if (world.getBlockState(pos).getBlock() instanceof SpeedBumpBlock) {
                     considerClosest(pos.toImmutable(), i, sq, bumpNode, bumpDist);
@@ -294,10 +329,22 @@ public final class RailPath {
             name, line, direction, nextStation, exitDirection, hub, transferLine, lineColor);
     }
 
-    // How far a marker may sit from a rail node and still count: one block out horizontally, two below to two above; primary placement is under the rail, but beside or on a platform above also counts, bound to the single nearest node.
+    // How far a station marker may sit from a rail node and still count: one block out horizontally, two below to two above; primary placement is under the rail, but beside or on a platform above also counts, bound to the single nearest node.
     private static final int STATION_H_RADIUS = 1;
     private static final int STATION_UP = 2;
     private static final int STATION_DOWN = 2;
+
+    // Speed bumps reach four blocks out to either side of the track so a train at high speed never overshoots the node the bump binds to.
+    private static final int BUMP_H_RADIUS = 4;
+
+    // The exit a junction block under this node dictates for a train arriving on the given heading, or null when there is no junction or it leaves that heading unrouted.
+    private static Direction junctionExit(World world, BlockPos node, Direction travel) {
+        BlockEntity be = world.getBlockEntity(node.down());
+        if (be instanceof JunctionBlockEntity junction) {
+            return junction.getExit(travel);
+        }
+        return null;
+    }
 
     private static RailShape railShape(World world, BlockPos pos) {
         BlockState state = world.getBlockState(pos);

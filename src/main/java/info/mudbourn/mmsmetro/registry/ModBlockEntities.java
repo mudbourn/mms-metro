@@ -1,6 +1,7 @@
 package info.mudbourn.mmsmetro.registry;
 
 import info.mudbourn.mmsmetro.MmsMetro;
+import info.mudbourn.mmsmetro.block.entity.JunctionBlockEntity;
 import info.mudbourn.mmsmetro.block.entity.SpeakerBlockEntity;
 import info.mudbourn.mmsmetro.block.entity.SpeedBumpBlockEntity;
 import info.mudbourn.mmsmetro.block.entity.StationBlockEntity;
@@ -19,6 +20,8 @@ public final class ModBlockEntities {
 
     public static BlockEntityType<SpeedBumpBlockEntity> SPEED_BUMP;
 
+    public static BlockEntityType<JunctionBlockEntity> JUNCTION;
+
     public static void register() {
         STATION = Registry.register(
             Registries.BLOCK_ENTITY_TYPE,
@@ -34,6 +37,11 @@ public final class ModBlockEntities {
             Registries.BLOCK_ENTITY_TYPE,
             Identifier.of(MmsMetro.MOD_ID, "speed_bump_block"),
             FabricBlockEntityTypeBuilder.create(SpeedBumpBlockEntity::new, ModBlocks.SPEED_BUMP).build()
+        );
+        JUNCTION = Registry.register(
+            Registries.BLOCK_ENTITY_TYPE,
+            Identifier.of(MmsMetro.MOD_ID, "junction_block"),
+            FabricBlockEntityTypeBuilder.create(JunctionBlockEntity::new, ModBlocks.JUNCTION).build()
         );
     }
 }

@@ -169,9 +169,13 @@ public class MetroCarEntity extends Entity {
         this.dataTracker.set(PATH_PITCH, value);
     }
 
-    // Linearly interpolated orientation for smooth client rendering.
+    // Linearly interpolated orientation for smooth client rendering; a jump too large to be motion (a terminus turn-around flipping the car about 180 degrees) is snapped rather than spun through.
     public float getLerpedPathYaw(float tickDelta) {
-        return MathHelper.lerpAngleDegrees(tickDelta, this.prevPathYaw, this.getPathYaw());
+        float target = this.getPathYaw();
+        if (Math.abs(MathHelper.subtractAngles(this.prevPathYaw, target)) > 135.0f) {
+            return target;
+        }
+        return MathHelper.lerpAngleDegrees(tickDelta, this.prevPathYaw, target);
     }
 
     public float getLerpedPathPitch(float tickDelta) {

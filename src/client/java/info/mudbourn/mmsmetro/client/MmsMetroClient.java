@@ -2,6 +2,7 @@ package info.mudbourn.mmsmetro.client;
 
 import info.mudbourn.mmsmetro.client.render.MetroCarEntityRenderer;
 import info.mudbourn.mmsmetro.client.screen.BumpEditScreen;
+import info.mudbourn.mmsmetro.client.screen.JunctionEditScreen;
 import info.mudbourn.mmsmetro.client.screen.StationEditScreen;
 import info.mudbourn.mmsmetro.network.MetroNetworking;
 import info.mudbourn.mmsmetro.registry.ModEntities;
@@ -26,5 +27,8 @@ public class MmsMetroClient implements ClientModInitializer {
         ClientPlayNetworking.registerGlobalReceiver(MetroNetworking.OpenBumpScreen.ID,
             (payload, context) -> context.client().execute(() ->
                 context.client().setScreen(new BumpEditScreen(payload))));
+        ClientPlayNetworking.registerGlobalReceiver(MetroNetworking.OpenJunctionScreen.ID,
+            (payload, context) -> context.client().execute(() ->
+                context.client().setScreen(new JunctionEditScreen(payload))));
     }
 }

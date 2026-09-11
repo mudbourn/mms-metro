@@ -4,6 +4,7 @@
   "block.mms_metro.station_block": "Station",
   "block.mms_metro.speaker_block": "Station Speaker",
   "block.mms_metro.speed_bump": "Speed Bump",
+  "block.mms_metro.junction_block": "Junction",
   "subtitles.mms_metro.train_incoming": "Train approaching",
   "subtitles.mms_metro.arrival": "Train arriving",
   "subtitles.mms_metro.buffer_wait": "Train waiting",

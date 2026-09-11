@@ -26,6 +26,7 @@ public final class ModItemGroups {
                 entries.add(ModBlocks.STATION);
                 entries.add(ModBlocks.SPEAKER);
                 entries.add(ModBlocks.SPEED_BUMP);
+                entries.add(ModBlocks.JUNCTION);
             })
             .build());
     }

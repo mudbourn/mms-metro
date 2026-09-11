@@ -1,0 +1,5 @@
+{
+  "variants": {
+    "": { "model": "mms_metro:block/junction_block" }
+  }
+}

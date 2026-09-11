@@ -41,7 +41,8 @@ public final class Consist {
     // True when the path is a closed ring the train circles forever instead of shuttling back at the end of the station list.
     private boolean loop;
 
-    private int nextBumpIndex;
+    // Arc through which bumps have already fired; a bump fires when the head crosses from at or below it to past it, so firing never depends on a cursor a marker refresh could desync.
+    private double firedThroughArc;
 
     private double headArc;
 
@@ -61,6 +62,9 @@ public final class Consist {
 
     // Set once a bump for the upcoming station is crossed, so the train eases down from the bump to a smooth halt at the platform.
     private boolean approachBraking;
+
+    // True after the head has crossed the ring seam at least once, so followers only wrap around the ring once the whole train has committed to it (never while the lead-in spur is still being ridden).
+    private boolean ringCommitted;
 
     // Ticks the train holds after sounding its departure horn before it actually pulls out (3 seconds).
     private static final int DEPART_DELAY_TICKS = 60;
@@ -102,7 +106,7 @@ public final class Consist {
         this.stations = path.stations();
         this.bumps = path.bumps();
         this.nextStationIndex = firstStationAhead(this.headArc);
-        this.nextBumpIndex = firstBumpAhead(this.headArc);
+        this.firedThroughArc = this.headArc;
         adoptIdentityFromNextStation();
     }
 
@@ -162,7 +166,6 @@ public final class Consist {
         this.stations = this.path.stations();
         this.bumps = this.path.bumps();
         this.nextStationIndex = firstStationAhead(this.headArc);
-        this.nextBumpIndex = firstBumpAhead(this.headArc);
         // Adopt an upcoming line only if the train has not yet served a stop.
         if (this.currentLine.isEmpty()) {
             adoptIdentityFromNextStation();
@@ -210,9 +213,13 @@ public final class Consist {
 
         // Crossing the loop seam is not a stop: fold the arc back to the ring start and resume the station cycle without braking.
         if (wrap && !blockedByTrain && len > 0.0 && this.headArc >= len) {
-            this.headArc -= len;
-            this.nextStationIndex = 0;
-            this.nextBumpIndex = firstBumpAhead(this.headArc);
+            double back = this.path.loopStartArc();
+            this.headArc = back + (this.headArc - len);
+            this.ringCommitted = true;
+            this.nextStationIndex = firstStationAtOrAfter(back);
+            // The fold jumps the head past the seam, so fire any bumps sitting just after the ring start before resetting the fired mark.
+            fireBumpsBetween(back, this.headArc);
+            this.firedThroughArc = this.headArc;
             this.approachBraking = false;
             this.bufferWaitTimer = 0;
             tickRolling();
@@ -386,11 +393,16 @@ public final class Consist {
         boolean waiting = this.phase == Phase.DWELLING;
         boolean arriving = this.approachBraking && this.phase == Phase.RUNNING;
         double len = this.path.length();
+        double back = this.path.loopStartArc();
+        // Followers wrap behind the seam into the ring span only once the train has looped at least once (or the whole path is a ring); until then they clamp, so the tail never teleports onto the ring while the lead-in spur is still being ridden.
+        boolean onRing = this.loop && len > 0.0 && (back == 0.0 || this.ringCommitted);
         for (int i = 0; i < this.cars.size(); i++) {
             double arc = this.headArc - i * this.config.carSpacing;
-            // On a loop, followers wrap around the seam so the tail trails the lead across the join; on a line they clamp at the start.
-            if (this.loop && len > 0.0) {
-                arc = ((arc % len) + len) % len;
+            if (onRing) {
+                double ringLen = len - back;
+                if (arc < back && ringLen > 0.0) {
+                    arc = len - ((back - arc) % ringLen);
+                }
             } else {
                 arc = Math.max(0.0, arc);
             }
@@ -420,16 +432,26 @@ public final class Consist {
         }
     }
 
-    // Fires the arrival announcement for every bump the head just passed and rings the upcoming station's speaker so waiting passengers hear the train approaching.
+    // Fires the arrival announcement for every bump the head advanced across this tick and rings the upcoming station's speaker so waiting passengers hear the train approaching.
     private void fireCrossedBumps() {
-        while (this.nextBumpIndex < this.bumps.size()
-                && this.headArc >= this.bumps.get(this.nextBumpIndex).arc()) {
-            info.mudbourn.mmsmetro.path.PathBump bump = this.bumps.get(this.nextBumpIndex);
+        fireBumpsBetween(this.firedThroughArc, this.headArc);
+        this.firedThroughArc = this.headArc;
+    }
+
+    // Fires every bump whose arc lies in (from, to]; scanning the whole list each tick means firing never depends on a cursor, so a mid-run marker refresh can never skip a bump.
+    private void fireBumpsBetween(double from, double to) {
+        if (to <= from) {
+            return;
+        }
+        for (info.mudbourn.mmsmetro.path.PathBump bump : this.bumps) {
+            double arc = bump.arc();
+            if (arc <= from + 1.0e-6 || arc > to + 1.0e-6) {
+                continue;
+            }
             setAnnouncement(buildAnnouncement(bump));
             playIncomingAtStation(bump.stationPos());
             // Crossing the bump arms the ease-down for the station it heralds.
             this.approachBraking = true;
-            this.nextBumpIndex++;
         }
     }
 
@@ -458,15 +480,6 @@ public final class Consist {
             sb.append("Exit will be on the ").append(exit).append('.');
         }
         return sb.toString();
-    }
-
-    private int firstBumpAhead(double arc) {
-        for (int i = 0; i < this.bumps.size(); i++) {
-            if (this.bumps.get(i).arc() > arc + 1.0e-3) {
-                return i;
-            }
-        }
-        return this.bumps.size();
     }
 
     // Turns the train around: rebuild the path back the way it came, flip the car order so the old tail leads, and re-seat every car; used at termini and dead ends so it shuttles instead of parking.
@@ -505,8 +518,9 @@ public final class Consist {
         this.speed = 0.0;
         this.phase = Phase.RUNNING;
         this.approachBraking = false;
+        this.ringCommitted = false;
         this.nextStationIndex = firstStationAhead(this.headArc);
-        this.nextBumpIndex = firstBumpAhead(this.headArc);
+        this.firedThroughArc = this.headArc;
         adoptIdentityFromNextStation();
         applyCarPositions();
     }
@@ -519,6 +533,16 @@ public final class Consist {
             case 2 -> Direction.NORTH;
             default -> Direction.EAST;
         };
+    }
+
+    // First station at or beyond the ring start, so a stop sitting on the seam is served each lap rather than skipped by a strict-ahead test.
+    private int firstStationAtOrAfter(double arc) {
+        for (int i = 0; i < this.stations.size(); i++) {
+            if (this.stations.get(i).arc() >= arc - 1.0e-3) {
+                return i;
+            }
+        }
+        return this.stations.size();
     }
 
     private int firstStationAhead(double arc) {

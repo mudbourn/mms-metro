@@ -1,7 +1,7 @@
 {
   "parent": "minecraft:block/cube_bottom_top",
   "textures": {
-    "top": "mms_metro:block/station_top",
+    "top": "mms_metro:block/junction_top",
     "side": "mms_metro:block/generic_side",
     "bottom": "mms_metro:block/generic_bottom"
   }
