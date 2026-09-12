@@ -350,6 +350,8 @@ public final class Consist {
             } else {
                 this.nextStationIndex++;
             }
+            // Fix the direction readout to the heading this leg pulls out on, so it holds through every junction and curve until the next stop rather than flipping with the local track.
+            updateDirection();
             // Pulling out: announce the next stop, its transfer, and the track warning.
             setAnnouncement(buildDepartAnnouncement());
             return;
@@ -398,7 +400,6 @@ public final class Consist {
     }
 
     private void applyCarPositions() {
-        updateDirection();
         PathStation next = nextStation();
         String nextName = next != null ? next.name() : "";
         boolean waiting = this.phase == Phase.DWELLING;

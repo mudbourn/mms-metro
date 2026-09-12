@@ -27,11 +27,13 @@ public final class ConsistManager {
 
     private static final Map<ServerWorld, List<Consist>> BY_WORLD = new HashMap<>();
 
-    // How often, in ticks, we look for loaded cars with no live consist and
-    // rebuild one — the path back to motion after a restart or a chunk reload.
+    // How often, in ticks, we rebuild a consist for loaded cars with no live one, the path back to motion after a restart or chunk reload.
     private static final int RECONCILE_INTERVAL = 20;
 
     private static final Map<ServerWorld, Integer> RECONCILE_TIMERS = new HashMap<>();
+
+    // Chunks this mod currently keeps force-loaded per world, keyed by ChunkPos long, so the moving set can be diffed each tick.
+    private static final Map<ServerWorld, java.util.Set<Long>> FORCED_CHUNKS = new HashMap<>();
 
     public static void init() {
         ServerTickEvents.END_WORLD_TICK.register(ConsistManager::tickWorld);
@@ -57,14 +59,12 @@ public final class ConsistManager {
         return ActionResult.SUCCESS;
     }
 
-    // Every loaded metro car in the world, whether or not it is still tracked
-    // in the in-memory registry (which is empty after a reload).
+    // Every loaded metro car in the world, whether or not it is still tracked in the in-memory registry (which is empty after a reload).
     private static List<? extends MetroCarEntity> allCars(ServerWorld world) {
         return world.getEntitiesByType(ModEntities.METRO_CAR, car -> true);
     }
 
-    // Discards every car sharing a consist id and drops that consist from the
-    // live registry. Returns the number of cars removed.
+    // Discards every car sharing a consist id and drops that consist from the live registry, returning the number of cars removed.
     private static int removeConsist(ServerWorld world, java.util.UUID consistId) {
         int removed = 0;
         for (MetroCarEntity car : allCars(world)) {
@@ -88,8 +88,7 @@ public final class ConsistManager {
     }
 
     public static Consist spawn(ServerWorld world, BlockPos rail, Direction facing, int cars, MetroConfig config) {
-        // Head toward whichever direction reaches a station soonest; if neither
-        // side has one, fall back to the way the player was facing.
+        // Head toward whichever direction reaches a station soonest, falling back to the way the player was facing when neither side has one.
         RailPath forward = RailPath.build(world, rail, facing, RailPath.MAX_NODES);
         RailPath backward = RailPath.build(world, rail, facing.getOpposite(), RailPath.MAX_NODES);
         RailPath path = backward.nearestStationArc() < forward.nearestStationArc() ? backward : forward;
@@ -168,26 +167,64 @@ public final class ConsistManager {
         RECONCILE_TIMERS.put(world, timer);
 
         List<Consist> list = BY_WORLD.get(world);
-        if (list == null) {
-            return;
+        if (list != null) {
+            Iterator<Consist> it = list.iterator();
+            while (it.hasNext()) {
+                Consist consist = it.next();
+                if (consist.isFinished()) {
+                    it.remove();
+                } else {
+                    consist.tick();
+                }
+            }
         }
 
-        Iterator<Consist> it = list.iterator();
-        while (it.hasNext()) {
-            Consist consist = it.next();
-            if (consist.isFinished()) {
-                it.remove();
-            } else {
-                consist.tick();
+        updateForcedChunks(world, list);
+    }
+
+    // Keeps the chunks around every live train force-loaded so a moving consist and the rail ahead never fall into an unloaded chunk, which would strand cars and truncate the walked path; the desired set is rebuilt from car positions each tick and diffed against the currently forced set.
+    private static void updateForcedChunks(ServerWorld world, List<Consist> list) {
+        java.util.Set<Long> desired = new java.util.HashSet<>();
+        int radius = MmsMetro.config().chunkRadius;
+        if (list != null) {
+            for (Consist consist : list) {
+                for (MetroCarEntity car : consist.cars()) {
+                    if (car.isRemoved()) {
+                        continue;
+                    }
+                    int cx = car.getBlockPos().getX() >> 4;
+                    int cz = car.getBlockPos().getZ() >> 4;
+                    for (int dx = -radius; dx <= radius; dx++) {
+                        for (int dz = -radius; dz <= radius; dz++) {
+                            desired.add(net.minecraft.util.math.ChunkPos.toLong(cx + dx, cz + dz));
+                        }
+                    }
+                }
             }
+        }
+
+        java.util.Set<Long> current = FORCED_CHUNKS.getOrDefault(world, java.util.Set.of());
+        for (long key : desired) {
+            if (!current.contains(key)) {
+                world.setChunkForced(net.minecraft.util.math.ChunkPos.getPackedX(key),
+                    net.minecraft.util.math.ChunkPos.getPackedZ(key), true);
+            }
+        }
+        for (long key : current) {
+            if (!desired.contains(key)) {
+                world.setChunkForced(net.minecraft.util.math.ChunkPos.getPackedX(key),
+                    net.minecraft.util.math.ChunkPos.getPackedZ(key), false);
+            }
+        }
+
+        if (desired.isEmpty()) {
+            FORCED_CHUNKS.remove(world);
+        } else {
+            FORCED_CHUNKS.put(world, desired);
         }
     }
 
-    // Rebuilds consists for any loaded cars that have no live consist ticking
-    // them. In-memory consists are lost on restart and dropped when their cars
-    // unload, but the car entities persist — so we group the loaded cars by
-    // consist id and reconstruct a consist for any group not already tracked by
-    // the same car objects (reloaded cars are new objects, so this refires).
+    // Rebuilds consists for any loaded cars with no live consist by grouping the loaded cars by consist id and reconstructing a consist for any group not already tracked by the same car objects (reloaded cars are new objects, so this refires).
     private static void reconcile(ServerWorld world) {
         Map<java.util.UUID, List<MetroCarEntity>> groups = new HashMap<>();
         for (MetroCarEntity car : allCars(world)) {
@@ -227,15 +264,12 @@ public final class ConsistManager {
         return null;
     }
 
-    // True when the consist is driving exactly these car objects (by identity),
-    // so a reloaded set of cars — new objects — counts as different.
+    // True when the consist is driving exactly these car objects by identity, so a reloaded set of cars (new objects) counts as different.
     private static boolean sameCars(Consist consist, List<MetroCarEntity> cars) {
         return consist.cars().size() == cars.size() && consist.cars().containsAll(cars);
     }
 
-    // Rebuilds one consist from its loaded cars, resolving a fresh path from the
-    // tail's rail in the direction the train faces so followers sit behind the
-    // lead exactly as they do at spawn.
+    // Rebuilds one consist from its loaded cars, resolving a fresh path from the tail's rail in the direction the train faces so followers sit behind the lead exactly as they do at spawn.
     private static Consist reconstruct(ServerWorld world, List<MetroCarEntity> cars) {
         cars.sort(java.util.Comparator.comparingInt(MetroCarEntity::getCarIndex));
         MetroCarEntity lead = cars.get(0);
@@ -265,8 +299,7 @@ public final class ConsistManager {
         return consist;
     }
 
-    // The travel direction of a train: the tail-to-lead vector for a multi-car
-    // train, or the lead's stored heading for a single car.
+    // The travel direction of a train: the tail-to-lead vector for a multi-car train, or the lead's stored heading for a single car.
     private static Direction headingOf(MetroCarEntity lead, MetroCarEntity tail) {
         if (lead != tail) {
             double dx = lead.getX() - tail.getX();
