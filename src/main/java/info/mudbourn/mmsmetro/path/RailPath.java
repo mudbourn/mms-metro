@@ -96,21 +96,28 @@ public final class RailPath {
                 continue;
             }
             double arc = this.cumulative[bump.nodeIndex];
-            // A directed bump only fires on the pass whose travel heading matches it, so a block the track rounds twice heralds each platform on its own side.
-            if (!directionMatches(bump.direction, headingName(arc))) {
-                continue;
-            }
+            String heading = headingName(arc);
+            // A directed bump heralds the first stop ahead whose direction readout it matches: the stop's fixed label when set, else the track's heading of travel here, so it fires on the right pass and lines up with fixed-label stations.
             PathStation ahead = null;
             for (PathStation station : this.stations) {
                 if (station.arc() <= arc + 1.0e-3) {
                     continue;
                 }
+                if (!directionMatches(bump.direction, stationReadout(station, heading))) {
+                    continue;
+                }
                 ahead = station;
                 break;
             }
-            // On a ring a bump past the last station heralds the first station across the seam, so wrap to the start rather than dropping it.
-            if (ahead == null && this.loop && !this.stations.isEmpty()) {
-                ahead = this.stations.get(0);
+            // On a ring a bump past the last station heralds the first matching station across the seam, so wrap to the start rather than dropping it.
+            if (ahead == null && this.loop) {
+                for (PathStation station : this.stations) {
+                    if (!directionMatches(bump.direction, stationReadout(station, heading))) {
+                        continue;
+                    }
+                    ahead = station;
+                    break;
+                }
             }
             if (ahead == null) {
                 continue;
@@ -213,6 +220,13 @@ public final class RailPath {
             i++;
         }
         return this.points.get(i + 1).subtract(this.points.get(i));
+    }
+
+    // The direction a train approaching a stop would display: the stop's fixed label when set, else the track's heading of travel; this is what a directed bump is matched against.
+    private static String stationReadout(PathStation station, String heading) {
+        return station.fixedDirection() && !station.direction().isEmpty()
+            ? station.direction()
+            : heading;
     }
 
     // Matches a bump's typed direction against a heading: an empty direction matches any, else the typed word must prefix the heading's cardinal so "east" and "Eastbound" both match "Eastbound".
