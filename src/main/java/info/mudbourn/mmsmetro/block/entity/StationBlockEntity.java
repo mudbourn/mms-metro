@@ -47,8 +47,9 @@ public class StationBlockEntity extends BlockEntity {
         return this.lineDirection;
     }
 
+    // Stored upper-case so a fixed direction label is always all-caps (e.g. "NORTHBOUND") whatever the source.
     public void setLineDirection(String value) {
-        this.lineDirection = value;
+        this.lineDirection = value.toUpperCase(java.util.Locale.ROOT);
         this.markDirty();
     }
 

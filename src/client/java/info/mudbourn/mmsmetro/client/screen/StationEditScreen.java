@@ -58,7 +58,14 @@ public class StationEditScreen extends Screen {
 
         this.nameField = labeledField(leftX, top, "Station name", this.data.name(), 64, "e.g. Central");
         this.lineField = labeledField(leftX, top + ROW_SPACING, "Line", this.data.line(), 64, "e.g. Red Line");
-        this.directionField = labeledField(leftX, top + ROW_SPACING * 2, "Direction (fixed-label only)", this.data.direction(), 64, "e.g. Northbound");
+        this.directionField = labeledField(leftX, top + ROW_SPACING * 2, "Direction (fixed-label only)", this.data.direction(), 64, "e.g. NORTHBOUND");
+        // Force the fixed direction label to all-caps as it is typed, matching how the server stores it.
+        this.directionField.setChangedListener(text -> {
+            String upper = text.toUpperCase(java.util.Locale.ROOT);
+            if (!upper.equals(text)) {
+                this.directionField.setText(upper);
+            }
+        });
         this.nextField = labeledField(leftX, top + ROW_SPACING * 3, "Next stop", this.data.next(), 64, "next station name");
 
         this.exitField = labeledField(rightX, top, "Exit side (left/right/both)", this.data.exit(), 32, "left / right / both");
