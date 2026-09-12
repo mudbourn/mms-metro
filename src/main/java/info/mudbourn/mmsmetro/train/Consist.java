@@ -110,13 +110,26 @@ public final class Consist {
         adoptIdentityFromNextStation();
     }
 
-    // Seeds line/direction from the next station ahead so the HUD reads right before the train serves its first stop.
+    // Seeds line/colour from the next station ahead so the HUD reads right before the train serves its first stop; direction is derived live by updateDirection.
     private void adoptIdentityFromNextStation() {
         PathStation next = nextStation();
         if (next != null) {
             this.currentLine = next.line();
-            this.currentDirection = next.direction();
             this.currentLineColor = lineColorArgb(next.lineColor());
+        }
+        updateDirection();
+    }
+
+    // Resolves the direction readout: a fixed-label stop ahead shows its typed label, otherwise the train shows its compass heading of travel, so a terminus turn-around inverts the direction on its own.
+    private void updateDirection() {
+        PathStation next = nextStation();
+        if (next != null && next.fixedDirection() && !next.direction().isEmpty()) {
+            this.currentDirection = next.direction();
+            return;
+        }
+        String heading = this.path.headingName(this.headArc);
+        if (!heading.isEmpty()) {
+            this.currentDirection = heading;
         }
     }
 
@@ -301,12 +314,9 @@ public final class Consist {
         this.currentDwellTicks = station.dwellTicks() > 0 ? station.dwellTicks() : this.config.dwellTicks;
         this.dwellTimer = this.currentDwellTicks;
         this.reverseAfterDwell = station.terminus();
-        // Serving this stop makes the train take on its line and direction.
+        // Serving this stop makes the train take on its line and colour; direction stays derived from travel.
         if (!station.line().isEmpty()) {
             this.currentLine = station.line();
-        }
-        if (!station.direction().isEmpty()) {
-            this.currentDirection = station.direction();
         }
         this.currentLineColor = lineColorArgb(station.lineColor());
         // Stopped and dwelling: a boarding status while the train waits; the stop name is on the grey HUD line.
@@ -388,6 +398,7 @@ public final class Consist {
     }
 
     private void applyCarPositions() {
+        updateDirection();
         PathStation next = nextStation();
         String nextName = next != null ? next.name() : "";
         boolean waiting = this.phase == Phase.DWELLING;

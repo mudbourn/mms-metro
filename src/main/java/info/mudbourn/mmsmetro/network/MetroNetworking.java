@@ -28,7 +28,7 @@ public final class MetroNetworking {
 
     // Server->client: open the station editor pre-filled with current values.
     public record OpenStationScreen(BlockPos pos, String name, String line, String color, String direction,
-                                    String next, String exit, String transfer,
+                                    boolean fixedDirection, String next, String exit, String transfer,
                                     boolean hub, boolean terminus, int dwell) implements CustomPayload {
         public static final Id<OpenStationScreen> ID =
             new Id<>(Identifier.of(MmsMetro.MOD_ID, "open_station"));
@@ -39,6 +39,7 @@ public final class MetroNetworking {
                 buf.writeString(v.line);
                 buf.writeString(v.color);
                 buf.writeString(v.direction);
+                buf.writeBoolean(v.fixedDirection);
                 buf.writeString(v.next);
                 buf.writeString(v.exit);
                 buf.writeString(v.transfer);
@@ -47,7 +48,7 @@ public final class MetroNetworking {
                 buf.writeVarInt(v.dwell);
             },
             buf -> new OpenStationScreen(buf.readBlockPos(), buf.readString(), buf.readString(), buf.readString(),
-                buf.readString(), buf.readString(), buf.readString(), buf.readString(),
+                buf.readString(), buf.readBoolean(), buf.readString(), buf.readString(), buf.readString(),
                 buf.readBoolean(), buf.readBoolean(), buf.readVarInt()));
 
         @Override
@@ -58,7 +59,7 @@ public final class MetroNetworking {
 
     // Client->server: apply the edited station values.
     public record StationEdit(BlockPos pos, String name, String line, String color, String direction,
-                              String next, String exit, String transfer,
+                              boolean fixedDirection, String next, String exit, String transfer,
                               boolean hub, boolean terminus, int dwell) implements CustomPayload {
         public static final Id<StationEdit> ID =
             new Id<>(Identifier.of(MmsMetro.MOD_ID, "station_edit"));
@@ -69,6 +70,7 @@ public final class MetroNetworking {
                 buf.writeString(v.line);
                 buf.writeString(v.color);
                 buf.writeString(v.direction);
+                buf.writeBoolean(v.fixedDirection);
                 buf.writeString(v.next);
                 buf.writeString(v.exit);
                 buf.writeString(v.transfer);
@@ -77,7 +79,7 @@ public final class MetroNetworking {
                 buf.writeVarInt(v.dwell);
             },
             buf -> new StationEdit(buf.readBlockPos(), buf.readString(), buf.readString(), buf.readString(),
-                buf.readString(), buf.readString(), buf.readString(), buf.readString(),
+                buf.readString(), buf.readBoolean(), buf.readString(), buf.readString(), buf.readString(),
                 buf.readBoolean(), buf.readBoolean(), buf.readVarInt()));
 
         @Override
@@ -191,7 +193,7 @@ public final class MetroNetworking {
     public static void openStation(ServerPlayerEntity player, BlockPos pos, StationBlockEntity station) {
         ServerPlayNetworking.send(player, new OpenStationScreen(pos,
             station.getStationName(), station.getLineName(), station.getLineColor(), station.getLineDirection(),
-            station.getNextStation(), station.getExitDirection(), station.getTransferLine(),
+            station.isFixedDirection(), station.getNextStation(), station.getExitDirection(), station.getTransferLine(),
             station.isHub(), station.isTerminus(), station.getDwellTicks()));
     }
 
@@ -219,6 +221,7 @@ public final class MetroNetworking {
             station.setLineName(edit.line());
             station.setLineColor(edit.color());
             station.setLineDirection(edit.direction());
+            station.setFixedDirection(edit.fixedDirection());
             station.setNextStation(edit.next());
             station.setExitDirection(edit.exit());
             station.setTransferLine(edit.transfer());

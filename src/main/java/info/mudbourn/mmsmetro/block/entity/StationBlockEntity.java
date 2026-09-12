@@ -17,8 +17,11 @@ public class StationBlockEntity extends BlockEntity {
     // The line's colour, stored as a DyeColor name (e.g. "red"); tints the line on the onboard HUD.
     private String lineColor = "white";
 
-    // Human-facing direction label for the line here (e.g. "Northbound"), free text shown on the onboard HUD.
+    // Fixed direction label for this stop (e.g. "Northbound"), shown verbatim on the HUD only when fixedDirection is set; otherwise the train shows its compass heading of travel.
     private String lineDirection = "";
+
+    // When true, the train shows this stop's typed lineDirection instead of its derived compass heading; for two-stop loops where the heading alone would not name the line.
+    private boolean fixedDirection = false;
 
     // Name of the next station down the line, for the HUD "Next stop" readout.
     private String nextStation = "";
@@ -46,6 +49,15 @@ public class StationBlockEntity extends BlockEntity {
 
     public void setLineDirection(String value) {
         this.lineDirection = value;
+        this.markDirty();
+    }
+
+    public boolean isFixedDirection() {
+        return this.fixedDirection;
+    }
+
+    public void setFixedDirection(boolean value) {
+        this.fixedDirection = value;
         this.markDirty();
     }
 
@@ -137,6 +149,7 @@ public class StationBlockEntity extends BlockEntity {
         this.lineName = view.getString("LineName", "");
         this.lineColor = view.getString("LineColor", "white");
         this.lineDirection = view.getString("LineDirection", "");
+        this.fixedDirection = view.getBoolean("FixedDirection", false);
         this.nextStation = view.getString("NextStation", "");
         this.exitDirection = view.getString("ExitDirection", "");
         this.hub = view.getBoolean("Hub", false);
@@ -152,6 +165,7 @@ public class StationBlockEntity extends BlockEntity {
         view.putString("LineName", this.lineName);
         view.putString("LineColor", this.lineColor);
         view.putString("LineDirection", this.lineDirection);
+        view.putBoolean("FixedDirection", this.fixedDirection);
         view.putString("NextStation", this.nextStation);
         view.putString("ExitDirection", this.exitDirection);
         view.putBoolean("Hub", this.hub);

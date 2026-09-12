@@ -7,7 +7,7 @@ import net.minecraft.storage.ReadView;
 import net.minecraft.storage.WriteView;
 import net.minecraft.util.math.BlockPos;
 
-// Holds a bump's editable direction, matched against a station's direction so a bump only heralds stops on its own side of the track.
+// Holds a bump's editable direction, matched against the track's heading of travel so a bump only heralds stops on its own side of the track.
 public class SpeedBumpBlockEntity extends BlockEntity {
 
     private String direction = "";

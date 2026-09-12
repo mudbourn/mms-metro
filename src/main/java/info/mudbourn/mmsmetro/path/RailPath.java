@@ -82,7 +82,7 @@ public final class RailPath {
             if (mark.nodeIndex < this.cumulative.length) {
                 this.stations.add(new PathStation(
                     this.cumulative[mark.nodeIndex], mark.dwellTicks, mark.pos, mark.terminus,
-                    mark.name, mark.line, mark.direction, mark.nextStation,
+                    mark.name, mark.line, mark.direction, mark.fixedDirection, mark.nextStation,
                     mark.exitDirection, mark.hub, mark.transferLine, mark.lineColor));
             }
         }
@@ -96,27 +96,21 @@ public final class RailPath {
                 continue;
             }
             double arc = this.cumulative[bump.nodeIndex];
+            // A directed bump only fires on the pass whose travel heading matches it, so a block the track rounds twice heralds each platform on its own side.
+            if (!directionMatches(bump.direction, headingName(arc))) {
+                continue;
+            }
             PathStation ahead = null;
             for (PathStation station : this.stations) {
                 if (station.arc() <= arc + 1.0e-3) {
-                    continue;
-                }
-                // A directed bump only heralds a stop on its own side, so a nearer opposite-direction platform never counts.
-                if (!bump.direction.isEmpty() && !bump.direction.equalsIgnoreCase(station.direction())) {
                     continue;
                 }
                 ahead = station;
                 break;
             }
             // On a ring a bump past the last station heralds the first station across the seam, so wrap to the start rather than dropping it.
-            if (ahead == null && this.loop) {
-                for (PathStation station : this.stations) {
-                    if (!bump.direction.isEmpty() && !bump.direction.equalsIgnoreCase(station.direction())) {
-                        continue;
-                    }
-                    ahead = station;
-                    break;
-                }
+            if (ahead == null && this.loop && !this.stations.isEmpty()) {
+                ahead = this.stations.get(0);
             }
             if (ahead == null) {
                 continue;
@@ -155,8 +149,9 @@ public final class RailPath {
 
     // A station found at a node, before arc-lengths are known.
     private record StationMark(int nodeIndex, int dwellTicks, BlockPos pos, boolean terminus,
-                              String name, String line, String direction, String nextStation,
-                              String exitDirection, boolean hub, String transferLine, String lineColor) {
+                              String name, String line, String direction, boolean fixedDirection,
+                              String nextStation, String exitDirection, boolean hub,
+                              String transferLine, String lineColor) {
     }
 
     // A speed bump found at a node, before arc-lengths are known.
@@ -193,6 +188,41 @@ public final class RailPath {
 
     private static Vec3d normalizeOr(Vec3d v, Vec3d fallback) {
         return v.lengthSquared() < 1.0e-9 ? fallback : v.normalize();
+    }
+
+    // Compass heading of travel at an arc as a metro-style "*bound" label, or empty when the path is too short to have a direction.
+    public String headingName(double arc) {
+        Vec3d dir = directionAt(arc);
+        if (dir == null) {
+            return "";
+        }
+        if (Math.abs(dir.x) >= Math.abs(dir.z)) {
+            return dir.x >= 0 ? "Eastbound" : "Westbound";
+        }
+        return dir.z >= 0 ? "Southbound" : "Northbound";
+    }
+
+    // Travel vector of the segment containing an arc, or null for a path with fewer than two points.
+    private Vec3d directionAt(double s) {
+        if (this.points.size() < 2) {
+            return null;
+        }
+        double clamped = Math.max(0.0, Math.min(this.length, s));
+        int i = 0;
+        while (i < this.cumulative.length - 2 && this.cumulative[i + 1] < clamped) {
+            i++;
+        }
+        return this.points.get(i + 1).subtract(this.points.get(i));
+    }
+
+    // Matches a bump's typed direction against a heading: an empty direction matches any, else the typed word must prefix the heading's cardinal so "east" and "Eastbound" both match "Eastbound".
+    private static boolean directionMatches(String typed, String heading) {
+        if (typed.isEmpty()) {
+            return true;
+        }
+        String t = typed.trim().toLowerCase().replace("bound", "").trim();
+        String h = heading.toLowerCase().replace("bound", "");
+        return !t.isEmpty() && h.startsWith(t);
     }
 
     public static RailPath build(World world, BlockPos start, Direction initialDir, int maxNodes) {
@@ -343,6 +373,7 @@ public final class RailPath {
         String name = "";
         String line = "";
         String direction = "";
+        boolean fixedDirection = false;
         String nextStation = "";
         String exitDirection = "";
         boolean hub = false;
@@ -355,6 +386,7 @@ public final class RailPath {
             name = station.getStationName();
             line = station.getLineName();
             direction = station.getLineDirection();
+            fixedDirection = station.isFixedDirection();
             nextStation = station.getNextStation();
             exitDirection = station.getExitDirection();
             hub = station.isHub();
@@ -362,7 +394,7 @@ public final class RailPath {
             lineColor = station.getLineColor();
         }
         return new StationMark(nodeIndex, dwell, best, terminus,
-            name, line, direction, nextStation, exitDirection, hub, transferLine, lineColor);
+            name, line, direction, fixedDirection, nextStation, exitDirection, hub, transferLine, lineColor);
     }
 
     // How far a station marker may sit from a rail node and still count: one block out horizontally, two below to two above; primary placement is under the rail, but beside or on a platform above also counts, bound to the single nearest node.

@@ -55,8 +55,7 @@ public final class MetroCommand {
             .then(buildStationTree()));
     }
 
-    // The /metro station ... subtree, editing the station block the player looks
-    // at. Text fields take the rest of the line so names may contain spaces.
+    // The /metro station ... subtree, editing the block the player looks at; text fields take the rest of the line so names may contain spaces.
     private static com.mojang.brigadier.builder.LiteralArgumentBuilder<ServerCommandSource> buildStationTree() {
         return CommandManager.literal("station")
             .executes(context -> stationInfo(context.getSource()))
@@ -87,7 +86,12 @@ public final class MetroCommand {
                 .then(CommandManager.argument("value", BoolArgumentType.bool())
                     .executes(context -> applyStation(context.getSource(), station ->
                         station.setHub(BoolArgumentType.getBool(context, "value")),
-                        "hub"))));
+                        "hub"))))
+            .then(CommandManager.literal("fixeddir")
+                .then(CommandManager.argument("value", BoolArgumentType.bool())
+                    .executes(context -> applyStation(context.getSource(), station ->
+                        station.setFixedDirection(BoolArgumentType.getBool(context, "value")),
+                        "fixeddir"))));
     }
 
     // A text station field taking the remainder of the command line.
@@ -148,8 +152,7 @@ public final class MetroCommand {
         return 1;
     }
 
-    // Resolves the station the player is looking at and hands it to an editor,
-    // reporting success or why no station could be found.
+    // Resolves the station the player is looking at and hands it to an editor, reporting success or why no station could be found.
     private static int applyStation(ServerCommandSource source,
                                     java.util.function.Consumer<StationBlockEntity> editor, String field) {
         StationBlockEntity station = targetedStation(source);
@@ -171,6 +174,7 @@ public final class MetroCommand {
         String info = "Station: name=" + s.getStationName()
             + ", line=" + s.getLineName()
             + ", direction=" + s.getLineDirection()
+            + ", fixeddir=" + s.isFixedDirection()
             + ", next=" + s.getNextStation()
             + ", exit=" + s.getExitDirection()
             + ", dwell=" + s.getDwellTicks()

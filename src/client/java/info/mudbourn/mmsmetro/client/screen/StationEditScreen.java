@@ -29,8 +29,10 @@ public class StationEditScreen extends Screen {
     private TextFieldWidget dwellField;
     private boolean hub;
     private boolean terminus;
+    private boolean fixedDirection;
     private ButtonWidget hubButton;
     private ButtonWidget terminusButton;
+    private ButtonWidget fixedDirButton;
     private DyeColor lineColor = DyeColor.WHITE;
 
     public StationEditScreen(MetroNetworking.OpenStationScreen data) {
@@ -38,6 +40,7 @@ public class StationEditScreen extends Screen {
         this.data = data;
         this.hub = data.hub();
         this.terminus = data.terminus();
+        this.fixedDirection = data.fixedDirection();
     }
 
     @Override
@@ -46,7 +49,7 @@ public class StationEditScreen extends Screen {
         int leftX = this.width / 2 - FIELD_WIDTH - 8;
         int rightX = this.width / 2 + 8;
         // Center the block vertically so it never runs off the bottom at high GUI scales.
-        int contentHeight = ROW_SPACING * 5 + 28;
+        int contentHeight = ROW_SPACING * 6 + 28;
         int top = Math.max(30, (this.height - contentHeight) / 2 + 10);
 
         int titleWidth = this.textRenderer.getWidth(this.title);
@@ -55,7 +58,7 @@ public class StationEditScreen extends Screen {
 
         this.nameField = labeledField(leftX, top, "Station name", this.data.name(), 64, "e.g. Central");
         this.lineField = labeledField(leftX, top + ROW_SPACING, "Line", this.data.line(), 64, "e.g. Red Line");
-        this.directionField = labeledField(leftX, top + ROW_SPACING * 2, "Direction", this.data.direction(), 64, "e.g. Northbound");
+        this.directionField = labeledField(leftX, top + ROW_SPACING * 2, "Direction (fixed-label only)", this.data.direction(), 64, "e.g. Northbound");
         this.nextField = labeledField(leftX, top + ROW_SPACING * 3, "Next stop", this.data.next(), 64, "next station name");
 
         this.exitField = labeledField(rightX, top, "Exit side (left/right/both)", this.data.exit(), 32, "left / right / both");
@@ -75,9 +78,17 @@ public class StationEditScreen extends Screen {
         }).dimensions(rightX + FIELD_WIDTH / 2 + 4, toggleY, FIELD_WIDTH / 2 - 4, FIELD_HEIGHT).build();
         this.addDrawableChild(this.terminusButton);
 
+        // Full-width toggle: force the typed direction label instead of the train's derived compass heading (for two-stop loops).
+        int fixedDirY = top + ROW_SPACING * 4;
+        this.fixedDirButton = ButtonWidget.builder(fixedDirMessage(), b -> {
+            this.fixedDirection = !this.fixedDirection;
+            b.setMessage(fixedDirMessage());
+        }).dimensions(leftX, fixedDirY, FIELD_WIDTH * 2 + 16, FIELD_HEIGHT).build();
+        this.addDrawableChild(this.fixedDirButton);
+
         // Full-width line-colour dropdown spanning both columns.
         this.lineColor = DyeColor.byId(this.data.color(), DyeColor.WHITE);
-        int colorY = top + ROW_SPACING * 4;
+        int colorY = top + ROW_SPACING * 5;
         this.addDrawableChild(CyclingButtonWidget.builder(
                 (DyeColor dye) -> Text.literal("Line color: " + prettyName(dye)), this.lineColor)
             .values(DyeColor.values())
@@ -85,7 +96,7 @@ public class StationEditScreen extends Screen {
             .build(leftX, colorY, FIELD_WIDTH * 2 + 16, FIELD_HEIGHT, Text.literal("Line color"),
                 (button, value) -> this.lineColor = value));
 
-        int bottom = top + ROW_SPACING * 5 + 8;
+        int bottom = top + ROW_SPACING * 6 + 8;
         this.addDrawableChild(ButtonWidget.builder(Text.literal("Done"), b -> save())
             .dimensions(this.width / 2 - 154, bottom, 150, 20).build());
         this.addDrawableChild(ButtonWidget.builder(Text.literal("Cancel"), b -> this.close())
@@ -126,6 +137,10 @@ public class StationEditScreen extends Screen {
         return Text.literal("Terminus: " + (this.terminus ? "yes" : "no"));
     }
 
+    private Text fixedDirMessage() {
+        return Text.literal("Fixed direction label: " + (this.fixedDirection ? "yes" : "no"));
+    }
+
     private void save() {
         int dwell;
         try {
@@ -135,7 +150,7 @@ public class StationEditScreen extends Screen {
         }
         ClientPlayNetworking.send(new MetroNetworking.StationEdit(this.data.pos(),
             this.nameField.getText(), this.lineField.getText(), this.lineColor.getId(), this.directionField.getText(),
-            this.nextField.getText(), this.exitField.getText(), this.transferField.getText(),
+            this.fixedDirection, this.nextField.getText(), this.exitField.getText(), this.transferField.getText(),
             this.hub, this.terminus, dwell));
         this.close();
     }
