@@ -36,7 +36,7 @@ public class BumpEditScreen extends Screen {
         this.directionField = new TextFieldWidget(this.textRenderer, cx - FIELD_WIDTH / 2, top,
             FIELD_WIDTH, FIELD_HEIGHT, Text.empty());
         this.directionField.setMaxLength(64);
-        this.directionField.setPlaceholder(Text.literal("e.g. Eastbound (match the stop)"));
+        this.directionField.setPlaceholder(Text.literal("e.g. Eastbound, or T_Northbound for a terminus"));
         this.directionField.setText(this.data.direction());
         this.addDrawableChild(this.directionField);
 

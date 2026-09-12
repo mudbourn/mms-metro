@@ -58,11 +58,11 @@ public final class RailPath {
         this.loopStartArc = loop && loopStartIndex > 0 && loopStartIndex < this.cumulative.length
             ? this.cumulative[loopStartIndex] : 0.0;
         resolveMarks(marks, bumpMarks);
-        info.mudbourn.mmsmetro.MmsMetro.LOGGER.info(
-            "[junction] path loop={} length={} loopStartArc={}", loop, this.length, this.loopStartArc);
+        info.mudbourn.mmsmetro.MmsMetro.LOGGER.debug(
+            "[path] loop={} length={} loopStartArc={}", loop, this.length, this.loopStartArc);
         for (PathStation s : this.stations) {
-            info.mudbourn.mmsmetro.MmsMetro.LOGGER.info(
-                "[junction]   station '{}' arc={} terminus={}", s.name(), s.arc(), s.terminus());
+            info.mudbourn.mmsmetro.MmsMetro.LOGGER.debug(
+                "[path]   station '{}' arc={} terminus={}", s.name(), s.arc(), s.terminus());
         }
     }
 
@@ -97,13 +97,16 @@ public final class RailPath {
             }
             double arc = this.cumulative[bump.nodeIndex];
             String heading = headingName(arc);
+            // A case-sensitive "T_" prefix is terminus mode: the bump heralds the nearest terminus whose label matches the rest of the entry, so a bump before a turn-around names the direction the terminus departs on (its NORTHBOUND label) rather than the SOUTHBOUND heading the train arrives on.
+            boolean terminusMode = bump.direction.startsWith("T_");
+            String wanted = terminusMode ? bump.direction.substring(2) : bump.direction;
             // A directed bump heralds the first stop ahead whose direction readout it matches: the stop's fixed label when set, else the track's heading of travel here, so it fires on the right pass and lines up with fixed-label stations.
             PathStation ahead = null;
             for (PathStation station : this.stations) {
                 if (station.arc() <= arc + 1.0e-3) {
                     continue;
                 }
-                if (!directionMatches(bump.direction, stationReadout(station, heading))) {
+                if (!bumpMatches(terminusMode, wanted, station, heading)) {
                     continue;
                 }
                 ahead = station;
@@ -112,7 +115,7 @@ public final class RailPath {
             // On a ring a bump past the last station heralds the first matching station across the seam, so wrap to the start rather than dropping it.
             if (ahead == null && this.loop) {
                 for (PathStation station : this.stations) {
-                    if (!directionMatches(bump.direction, stationReadout(station, heading))) {
+                    if (!bumpMatches(terminusMode, wanted, station, heading)) {
                         continue;
                     }
                     ahead = station;
@@ -229,6 +232,14 @@ public final class RailPath {
             : heading;
     }
 
+    // True when a bump should herald this station: terminus mode also requires the station be a terminus, and either mode still matches the wanted label against the station's readout, with an empty label matching any.
+    private static boolean bumpMatches(boolean terminusMode, String wanted, PathStation station, String heading) {
+        if (terminusMode && !station.terminus()) {
+            return false;
+        }
+        return directionMatches(wanted, stationReadout(station, heading));
+    }
+
     // Matches a bump's typed direction against a heading: an empty direction matches any, else the typed word must prefix the heading's cardinal so "east" and "Eastbound" both match "Eastbound".
     private static boolean directionMatches(String typed, String heading) {
         if (typed.isEmpty()) {
@@ -249,8 +260,8 @@ public final class RailPath {
             return new RailPath(points, nodes, marks, bumpMarks, false, 0);
         }
 
-        info.mudbourn.mmsmetro.MmsMetro.LOGGER.info(
-            "[junction] build start {} shape {} initialDir {}", start, startShape, initialDir);
+        info.mudbourn.mmsmetro.MmsMetro.LOGGER.debug(
+            "[path] build start {} shape {} initialDir {}", start, startShape, initialDir);
         points.add(centerPoint(start, startShape));
         nodes.add(start.toImmutable());
         Direction travel = pickExit(startShape, initialDir);
@@ -308,8 +319,8 @@ public final class RailPath {
             points.add(points.get(loopStartIndex));
         }
 
-        info.mudbourn.mmsmetro.MmsMetro.LOGGER.info(
-            "[junction] build end: {} nodes, last {}, reason {}",
+        info.mudbourn.mmsmetro.MmsMetro.LOGGER.debug(
+            "[path] build end: {} nodes, last {}, reason {}",
             nodes.size(), nodes.isEmpty() ? "none" : nodes.get(nodes.size() - 1), endReason);
         scanMarks(world, nodes, marks, bumpMarks);
         return new RailPath(points, nodes, marks, bumpMarks, loop, loopStartIndex);
@@ -429,7 +440,7 @@ public final class RailPath {
         BlockEntity be = world.getBlockEntity(node.down());
         if (be instanceof JunctionBlockEntity junction) {
             Direction exit = junction.getExit(travel);
-            info.mudbourn.mmsmetro.MmsMetro.LOGGER.info(
+            info.mudbourn.mmsmetro.MmsMetro.LOGGER.debug(
                 "[junction] at {} train heading {} -> exit {}", node.down(), travel, exit);
             return exit;
         }

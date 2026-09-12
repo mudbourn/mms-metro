@@ -52,9 +52,10 @@ public final class ConsistManager {
 
         if (world instanceof ServerWorld serverWorld) {
             int cars = removeConsist(serverWorld, car.getConsistId());
-            int trains = cars > 0 ? 1 : 0;
-            player.sendMessage(net.minecraft.text.Text.literal(
-                "Removed " + trains + " train(s) (" + cars + " car(s))."), true);
+            String message = cars > 0
+                ? "Removed " + cars + " car(s)."
+                : "No cars removed; the rest of this train may be in an unloaded chunk.";
+            player.sendMessage(net.minecraft.text.Text.literal(message), true);
         }
         return ActionResult.SUCCESS;
     }
