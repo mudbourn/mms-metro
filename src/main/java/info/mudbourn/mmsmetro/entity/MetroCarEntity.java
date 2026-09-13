@@ -246,6 +246,16 @@ public class MetroCarEntity extends Entity {
         }
     }
 
+    // Number of samples currently in the client trail, for diagnostics.
+    public int trailSize() {
+        return this.trail.size();
+    }
+
+    // Whether this car's tick loop has run on the client, revealed by whether age has advanced past zero.
+    public int clientAge() {
+        return this.age;
+    }
+
     // First eight characters of the consist id, enough to group a train's cars in the log.
     private String shortId() {
         String s = this.consistId.toString();
