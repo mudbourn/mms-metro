@@ -156,11 +156,6 @@ public final class RailPath {
         resolveMarks(marks, bumpMarks);
     }
 
-    // Arc-length distance to the first station on this path, or +infinity if it reaches none; used to steer a train toward the nearer station.
-    public double nearestStationArc() {
-        return this.stations.isEmpty() ? Double.POSITIVE_INFINITY : this.stations.get(0).arc();
-    }
-
     public double length() {
         return this.length;
     }

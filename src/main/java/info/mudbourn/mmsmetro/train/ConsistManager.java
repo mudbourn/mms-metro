@@ -89,12 +89,11 @@ public final class ConsistManager {
     }
 
     public static Consist spawn(ServerWorld world, BlockPos rail, Direction facing, int cars, MetroConfig config) {
-        // Head toward whichever direction reaches a station soonest, falling back to the way the player was facing when neither side has one.
+        // Head the way the player faces so a directional line departs as set up; only reverse when facing hits an immediate dead end, since the nearest-station guess would otherwise flip the train toward a closer stop behind it and route it wrong through the junction ahead.
         RailPath forward = RailPath.build(world, rail, facing, RailPath.MAX_NODES);
-        RailPath backward = RailPath.build(world, rail, facing.getOpposite(), RailPath.MAX_NODES);
-        RailPath path = backward.nearestStationArc() < forward.nearestStationArc() ? backward : forward;
+        RailPath path = forward;
         if (path.length() <= 0.0) {
-            path = forward.length() > 0.0 ? forward : backward;
+            path = RailPath.build(world, rail, facing.getOpposite(), RailPath.MAX_NODES);
         }
         if (path.length() <= 0.0) {
             return null;
