@@ -408,6 +408,8 @@ public final class Consist {
         double back = this.path.loopStartArc();
         // Followers wrap behind the seam into the ring span only once the train has looped at least once (or the whole path is a ring); until then they clamp, so the tail never teleports onto the ring while the lead-in spur is still being ridden.
         boolean onRing = this.loop && len > 0.0 && (back == 0.0 || this.ringCommitted);
+        BlockPos pathOrigin = this.path.origin();
+        Direction pathInitialDir = this.path.initialDir();
         for (int i = 0; i < this.cars.size(); i++) {
             double arc = this.headArc - i * this.config.carSpacing;
             if (onRing) {
@@ -429,6 +431,7 @@ public final class Consist {
             // Report this tick's movement as velocity so the client carries a seated rider along instead of leaving them a few ticks behind the teleported position.
             car.setVelocity(point.pos().subtract(previous));
             car.setArcLength((float) arc);
+            car.setPathIdentity(pathOrigin, pathInitialDir);
             car.setHudInfo(this.currentLine, this.currentDirection, nextName, waiting, this.currentLineColor, arriving);
             // Re-seat riders onto the car's new position this same tick, so entity tick order never leaves them a tick behind.
             for (Entity passenger : car.getPassengerList()) {

@@ -275,7 +275,19 @@ public final class ConsistManager {
         cars.sort(java.util.Comparator.comparingInt(MetroCarEntity::getCarIndex));
         MetroCarEntity lead = cars.get(0);
         MetroCarEntity tail = cars.get(cars.size() - 1);
+        MetroConfig config = MmsMetro.config();
 
+        // Preferred: rebuild the exact path the consist last ran, from the origin and heading persisted on the lead, and seat the lead at its own saved arc so every car lands back on the same track even across a junction.
+        BlockPos origin = lead.getPathOrigin();
+        Direction initialDir = lead.getPathInitialDir();
+        if (origin != null && initialDir != null) {
+            RailPath path = RailPath.build(world, origin, initialDir, RailPath.MAX_NODES);
+            if (path.length() > 0.0) {
+                return assemble(config, path, Math.min(lead.getArcLength(), path.length()), cars);
+            }
+        }
+
+        // Fallback for cars saved before the identity was stored, or an origin whose rail is gone: walk a fresh path from the tail as before.
         BlockPos rail = findRail(world, tail.getBlockPos());
         if (rail == null) {
             rail = findRail(world, lead.getBlockPos());
@@ -284,14 +296,15 @@ public final class ConsistManager {
             return null;
         }
 
-        Direction heading = headingOf(lead, tail);
-        RailPath path = RailPath.build(world, rail, heading, RailPath.MAX_NODES);
+        RailPath path = RailPath.build(world, rail, headingOf(lead, tail), RailPath.MAX_NODES);
         if (path.length() <= 0.0) {
             return null;
         }
+        return assemble(config, path, Math.min((cars.size() - 1) * config.carSpacing, path.length()), cars);
+    }
 
-        MetroConfig config = MmsMetro.config();
-        double headArc = Math.min((cars.size() - 1) * config.carSpacing, path.length());
+    // Builds a consist on a resolved path with the given head arc and seats its cars.
+    private static Consist assemble(MetroConfig config, RailPath path, double headArc, List<MetroCarEntity> cars) {
         Consist consist = new Consist(path, config, headArc);
         for (MetroCarEntity car : cars) {
             consist.addCar(car);

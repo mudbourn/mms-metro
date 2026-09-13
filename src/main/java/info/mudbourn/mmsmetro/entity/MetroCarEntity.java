@@ -69,6 +69,11 @@ public class MetroCarEntity extends Entity {
     // Groups the cars of one train so a car can be traced to its whole consist even after a reload, when the in-memory registry is gone.
     private java.util.UUID consistId = java.util.UUID.randomUUID();
 
+    // The rail and heading the consist's path was walked from, persisted so a reload rebuilds the identical path deterministically rather than re-guessing one that diverges at junctions; null until the consist stamps it.
+    private net.minecraft.util.math.BlockPos pathOrigin;
+
+    private net.minecraft.util.math.Direction pathInitialDir;
+
     public MetroCarEntity(EntityType<? extends MetroCarEntity> type, World world) {
         super(type, world);
         this.setNoGravity(true);
@@ -215,6 +220,20 @@ public class MetroCarEntity extends Entity {
         this.dataTracker.set(CAR_INDEX, value);
     }
 
+    public net.minecraft.util.math.BlockPos getPathOrigin() {
+        return this.pathOrigin;
+    }
+
+    public net.minecraft.util.math.Direction getPathInitialDir() {
+        return this.pathInitialDir;
+    }
+
+    // Stamped by the consist so the path's identity rides along on the car and survives a reload.
+    public void setPathIdentity(net.minecraft.util.math.BlockPos origin, net.minecraft.util.math.Direction initialDir) {
+        this.pathOrigin = origin;
+        this.pathInitialDir = initialDir;
+    }
+
     @Override
     protected void readCustomData(ReadView view) {
         this.setArcLength(view.getFloat("ArcLength", 0.0f));
@@ -231,6 +250,22 @@ public class MetroCarEntity extends Entity {
                 // Keep the freshly generated id if the stored value is corrupt.
             }
         }
+        if (view.getInt("PathOriginSet", 0) != 0) {
+            this.pathOrigin = new net.minecraft.util.math.BlockPos(
+                view.getInt("PathOriginX", 0), view.getInt("PathOriginY", 0), view.getInt("PathOriginZ", 0));
+        }
+        this.pathInitialDir = parseHorizontalDir(view.getString("PathInitialDir", ""));
+    }
+
+    // The horizontal direction a saved name spells, or null when it names none.
+    private static net.minecraft.util.math.Direction parseHorizontalDir(String name) {
+        return switch (name) {
+            case "north" -> net.minecraft.util.math.Direction.NORTH;
+            case "south" -> net.minecraft.util.math.Direction.SOUTH;
+            case "east" -> net.minecraft.util.math.Direction.EAST;
+            case "west" -> net.minecraft.util.math.Direction.WEST;
+            default -> null;
+        };
     }
 
     @Override
@@ -240,6 +275,15 @@ public class MetroCarEntity extends Entity {
         view.putFloat("PathYaw", this.getPathYaw());
         view.putFloat("PathPitch", this.getPathPitch());
         view.putString("ConsistId", this.consistId.toString());
+        if (this.pathOrigin != null) {
+            view.putInt("PathOriginSet", 1);
+            view.putInt("PathOriginX", this.pathOrigin.getX());
+            view.putInt("PathOriginY", this.pathOrigin.getY());
+            view.putInt("PathOriginZ", this.pathOrigin.getZ());
+        }
+        if (this.pathInitialDir != null) {
+            view.putString("PathInitialDir", this.pathInitialDir.asString());
+        }
     }
 
     // Seat slots inside the car body as {forward, lateral} offsets in blocks, ordered centre-outward so a lone rider sits in the middle, spanning the minecart's length and width so no one sits over the coupling gap.

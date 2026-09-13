@@ -45,10 +45,18 @@ public final class RailPath {
     // Arc the loop folds back to when the head passes the end: zero for a ring closed at its start, the rejoin node's arc for a spur that feeds into a ring, so the lead-in spur is ridden once and the ring circled forever after.
     private final double loopStartArc;
 
+    // The origin rail and initial heading this path was walked from; rebuilding from these reproduces the identical geometry, so a reloaded consist re-seats onto the same track instead of a re-guessed one that diverges at junctions.
+    private final BlockPos origin;
+
+    private final Direction initialDir;
+
     private RailPath(List<Vec3d> points, List<BlockPos> nodes,
-                    List<StationMark> marks, List<BumpMark> bumpMarks, boolean loop, int loopStartIndex) {
+                    List<StationMark> marks, List<BumpMark> bumpMarks, boolean loop, int loopStartIndex,
+                    BlockPos origin, Direction initialDir) {
         this.points = points;
         this.nodes = nodes;
+        this.origin = origin;
+        this.initialDir = initialDir;
         this.loop = loop;
         this.cumulative = new double[points.size()];
         for (int i = 1; i < points.size(); i++) {
@@ -68,6 +76,16 @@ public final class RailPath {
 
     public boolean isLoop() {
         return this.loop;
+    }
+
+    // The rail this path was walked from, stored so a reload rebuilds the same geometry.
+    public BlockPos origin() {
+        return this.origin;
+    }
+
+    // The heading this path was walked from, paired with the origin to reproduce the walk.
+    public Direction initialDir() {
+        return this.initialDir;
     }
 
     // Arc the head returns to after crossing the seam; the ring is the span from here to length().
@@ -257,7 +275,7 @@ public final class RailPath {
         List<BumpMark> bumpMarks = new ArrayList<>();
         RailShape startShape = railShape(world, start);
         if (startShape == null) {
-            return new RailPath(points, nodes, marks, bumpMarks, false, 0);
+            return new RailPath(points, nodes, marks, bumpMarks, false, 0, start.toImmutable(), initialDir);
         }
 
         info.mudbourn.mmsmetro.MmsMetro.LOGGER.debug(
@@ -323,7 +341,7 @@ public final class RailPath {
             "[path] build end: {} nodes, last {}, reason {}",
             nodes.size(), nodes.isEmpty() ? "none" : nodes.get(nodes.size() - 1), endReason);
         scanMarks(world, nodes, marks, bumpMarks);
-        return new RailPath(points, nodes, marks, bumpMarks, loop, loopStartIndex);
+        return new RailPath(points, nodes, marks, bumpMarks, loop, loopStartIndex, start.toImmutable(), initialDir);
     }
 
     // A run of node indices more than this far apart counts as a separate pass of the track past one marker, so a route that visits a block twice (an out-and-back stub, or a junction crossed on two headings) stops there on each pass.
