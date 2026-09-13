@@ -213,16 +213,16 @@ public final class RailPath {
         return v.lengthSquared() < 1.0e-9 ? fallback : v.normalize();
     }
 
-    // Compass heading of travel at an arc as a metro-style "*bound" label, or empty when the path is too short to have a direction.
+    // Compass heading of travel at an arc as a metro-style all-caps "*BOUND" label matching the typed direction fields, or empty when the path is too short to have a direction.
     public String headingName(double arc) {
         Vec3d dir = directionAt(arc);
         if (dir == null) {
             return "";
         }
         if (Math.abs(dir.x) >= Math.abs(dir.z)) {
-            return dir.x >= 0 ? "Eastbound" : "Westbound";
+            return dir.x >= 0 ? "EASTBOUND" : "WESTBOUND";
         }
-        return dir.z >= 0 ? "Southbound" : "Northbound";
+        return dir.z >= 0 ? "SOUTHBOUND" : "NORTHBOUND";
     }
 
     // Travel vector of the segment containing an arc, or null for a path with fewer than two points.

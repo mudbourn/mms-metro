@@ -129,7 +129,7 @@ public class MetroCarEntity extends Entity {
         return new Vec3d(this.dataTracker.get(POS_X), this.dataTracker.get(POS_Y), this.dataTracker.get(POS_Z));
     }
 
-    // Mirrors synced tracker fields onto the client: the consist id for grouping, and the path position (arriving last of the three) as the interpolation target that drives the body.
+    // Mirrors the synced consist id onto the client so its cars group even after a reload; the tracked path position is read straight off the tracker each tick in tick(), so it needs no per-field callback.
     @Override
     public void onTrackedDataSet(TrackedData<?> data) {
         super.onTrackedDataSet(data);
@@ -142,8 +142,6 @@ public class MetroCarEntity extends Entity {
                     // Keep the current id if the synced value is corrupt.
                 }
             }
-        } else if (POS_Z.equals(data) && this.getEntityWorld().isClient()) {
-            this.interpolator.refreshPositionAndAngles(trackedPos(), this.getYaw(), this.getPitch());
         }
     }
 
@@ -246,6 +244,8 @@ public class MetroCarEntity extends Entity {
         // On the client, advance the interpolator so the car eases between tracked packets; the server drives position from the consist.
         if (this.getEntityWorld().isClient()) {
             snapOnDiscontinuity();
+            // Re-aim the interpolator at the latest tracked position every tick so the body advances even when only one coordinate changed or a screen (a world map) stalled the client between packets, rather than freezing on a stale target until the next POS_Z update.
+            this.interpolator.refreshPositionAndAngles(trackedPos(), this.getYaw(), this.getPitch());
             this.interpolator.tick();
             logClientDiag();
         }
