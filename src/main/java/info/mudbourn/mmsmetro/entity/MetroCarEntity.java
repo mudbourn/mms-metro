@@ -206,6 +206,7 @@ public class MetroCarEntity extends Entity {
         if (this.getEntityWorld().isClient()) {
             this.interpolator.tick();
             recordTrail();
+            logClientDiag();
         }
         // Carry orientation forward each tick so the render lerp has a baseline.
         this.prevPathYaw = this.getPathYaw();
@@ -243,6 +244,47 @@ public class MetroCarEntity extends Entity {
         while ((tail = this.trail.peekLast()) != null && this.trailOdometer - tail[3] > TRAIL_MAX_DIST) {
             this.trail.removeLast();
         }
+    }
+
+    // First eight characters of the consist id, enough to group a train's cars in the log.
+    private String shortId() {
+        String s = this.consistId.toString();
+        return s.length() >= 8 ? s.substring(0, 8) : s;
+    }
+
+    // Once a second, logs this car's client position, velocity, trail coverage, and how far the trail is shifting a follower's body from its own position, so a rider can report whether the gap tracks speed (interpolation) or persists at rest (real).
+    private void logClientDiag() {
+        if (this.age % 20 != 0) {
+            return;
+        }
+        Vec3d p = this.getEntityPos();
+        Vec3d v = this.getVelocity();
+        double[] head = this.trail.peekFirst();
+        double[] tail = this.trail.peekLast();
+        double cover = head != null && tail != null ? head[3] - tail[3] : 0.0;
+        String base = String.format(
+            "[diag-cli] cid %s idx %d arc %.3f pos (%.2f,%.2f,%.2f) vel (%.3f,%.3f,%.3f) trail n=%d cover=%.2f",
+            shortId(), this.getCarIndex(), this.getArcLength(),
+            p.x, p.y, p.z, v.x, v.y, v.z, this.trail.size(), cover);
+        if (this.getCarIndex() == 0) {
+            info.mudbourn.mmsmetro.MmsMetro.LOGGER.info(base + " (lead)");
+            return;
+        }
+        MetroCarEntity lead = findLead();
+        if (lead == null) {
+            info.mudbourn.mmsmetro.MmsMetro.LOGGER.info(base + " lead=NONE");
+            return;
+        }
+        double arcBack = lead.getArcLength() - this.getArcLength();
+        Vec3d target = lead.trailPointBehind(arcBack);
+        if (target == null) {
+            info.mudbourn.mmsmetro.MmsMetro.LOGGER.info(base + String.format(
+                " leadArc %.3f arcBack %.3f target=SHORT(fallback)", lead.getArcLength(), arcBack));
+            return;
+        }
+        info.mudbourn.mmsmetro.MmsMetro.LOGGER.info(base + String.format(
+            " leadArc %.3f arcBack %.3f target (%.2f,%.2f,%.2f) offset %.3f",
+            lead.getArcLength(), arcBack, target.x, target.y, target.z, target.subtract(p).length()));
     }
 
     // The point a given arc distance back along this car's trail, or null when the trail is not yet that long.
