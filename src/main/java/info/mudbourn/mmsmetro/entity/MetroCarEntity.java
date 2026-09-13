@@ -63,6 +63,18 @@ public class MetroCarEntity extends Entity {
     private float prevPathYaw;
     private float prevPathPitch;
 
+    // Client-only breadcrumb trail of this car's recent positions as {x, y, z, odometer}, newest first, so a follower can render rigidly along the lead's path instead of lagging behind its own network interpolation.
+    private final java.util.ArrayDeque<double[]> trail = new java.util.ArrayDeque<>();
+
+    // Running distance travelled, stamped onto each trail sample so the trail can be trimmed and walked by arc without recomputing lengths.
+    private double trailOdometer;
+
+    // How much trail to keep, in blocks; comfortably longer than any train.
+    private static final double TRAIL_MAX_DIST = 256.0;
+
+    // Cached lead of this car's consist, revalidated cheaply each lookup.
+    private MetroCarEntity cachedLead;
+
     // Smooths the car's position between the consist's per-tick teleports so the body and its riders advance together over the tracking interval instead of the rider trailing the car.
     private final PositionInterpolator interpolator = new PositionInterpolator(this, 1);
 
@@ -193,6 +205,7 @@ public class MetroCarEntity extends Entity {
         // On the client, advance the interpolator so the car eases between tracked packets; the server drives position from the consist.
         if (this.getEntityWorld().isClient()) {
             this.interpolator.tick();
+            recordTrail();
         }
         // Carry orientation forward each tick so the render lerp has a baseline.
         this.prevPathYaw = this.getPathYaw();
@@ -202,6 +215,83 @@ public class MetroCarEntity extends Entity {
     @Override
     public PositionInterpolator getInterpolator() {
         return this.interpolator;
+    }
+
+    // Appends this tick's client position to the trail, restarting it on a discontinuity (a terminus flip or a chunk-reload teleport) and trimming the far end to the keep distance.
+    private void recordTrail() {
+        double x = this.getX();
+        double y = this.getY();
+        double z = this.getZ();
+        double[] head = this.trail.peekFirst();
+        if (head != null) {
+            double dx = x - head[0];
+            double dy = y - head[1];
+            double dz = z - head[2];
+            double seg2 = dx * dx + dy * dy + dz * dz;
+            if (seg2 < 1.0e-6) {
+                return;
+            }
+            if (seg2 > 16.0) {
+                this.trail.clear();
+                this.trailOdometer = 0.0;
+            } else {
+                this.trailOdometer += Math.sqrt(seg2);
+            }
+        }
+        this.trail.addFirst(new double[] {x, y, z, this.trailOdometer});
+        double[] tail;
+        while ((tail = this.trail.peekLast()) != null && this.trailOdometer - tail[3] > TRAIL_MAX_DIST) {
+            this.trail.removeLast();
+        }
+    }
+
+    // The point a given arc distance back along this car's trail, or null when the trail is not yet that long.
+    public Vec3d trailPointBehind(double distance) {
+        double[] head = this.trail.peekFirst();
+        if (head == null) {
+            return null;
+        }
+        if (distance <= 0.0) {
+            return new Vec3d(head[0], head[1], head[2]);
+        }
+        double targetOdo = head[3] - distance;
+        double[] newer = null;
+        for (double[] sample : this.trail) {
+            if (newer != null && sample[3] <= targetOdo) {
+                double span = newer[3] - sample[3];
+                double t = span > 1.0e-9 ? (newer[3] - targetOdo) / span : 0.0;
+                return new Vec3d(
+                    newer[0] + (sample[0] - newer[0]) * t,
+                    newer[1] + (sample[1] - newer[1]) * t,
+                    newer[2] + (sample[2] - newer[2]) * t
+                );
+            }
+            newer = sample;
+        }
+        return null;
+    }
+
+    // This car's lead: itself when it is the lead, otherwise the consist's index-zero car, found once and cached until it is gone or regrouped.
+    public MetroCarEntity findLead() {
+        if (this.getCarIndex() == 0) {
+            return this;
+        }
+        if (this.cachedLead != null
+            && !this.cachedLead.isRemoved()
+            && this.cachedLead.getCarIndex() == 0
+            && this.cachedLead.getConsistId().equals(this.consistId)) {
+            return this.cachedLead;
+        }
+        this.cachedLead = null;
+        net.minecraft.util.math.Box box = net.minecraft.util.math.Box.of(this.getEntityPos(), 128.0, 128.0, 128.0);
+        for (MetroCarEntity car : this.getEntityWorld().getEntitiesByClass(
+            MetroCarEntity.class,
+            box,
+            other -> other.getCarIndex() == 0 && other.getConsistId().equals(this.consistId))) {
+            this.cachedLead = car;
+            break;
+        }
+        return this.cachedLead;
     }
 
     public java.util.UUID getConsistId() {

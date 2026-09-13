@@ -120,10 +120,11 @@ public final class Consist {
         updateDirection();
     }
 
-    // Resolves the direction readout: a fixed-label stop ahead shows its typed label, otherwise the train shows its compass heading of travel, so a terminus turn-around inverts the direction on its own.
+    // Resolves the direction readout: a fixed-label stop ahead shows its typed label, otherwise the train shows its compass heading of travel, so a terminus turn-around inverts the direction on its own. A terminus withholds its label until the train has actually stopped there, so the whole approach keeps the travel heading and only flips on arrival.
     private void updateDirection() {
         PathStation next = nextStation();
-        if (next != null && next.fixedDirection() && !next.direction().isEmpty()) {
+        if (next != null && next.fixedDirection() && !next.direction().isEmpty()
+            && (!next.terminus() || this.phase == Phase.DWELLING)) {
             this.currentDirection = next.direction();
             return;
         }
@@ -372,6 +373,8 @@ public final class Consist {
 
         // Sound the departure horn, then hold DEPART_DELAY_TICKS before the train starts moving.
         playFromLead(ModSounds.DEPARTURE, 1.0f);
+        // The horn is the cue to flip the readout: a terminus takes on its fixed departure label now, which updateDirection withheld through the whole dwell.
+        updateDirection();
         this.departing = true;
         this.departTimer = DEPART_DELAY_TICKS;
     }

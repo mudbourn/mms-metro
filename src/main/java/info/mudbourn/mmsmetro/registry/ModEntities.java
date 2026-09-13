@@ -23,9 +23,8 @@ public final class ModEntities {
             id,
             EntityType.Builder.create(MetroCarEntity::new, SpawnGroup.MISC)
                 .dimensions(1.4f, 1.4f)
-                // Sync every tick so no car renders stale relative to the ridden one, which the client positions from the tight ride path rather than the interpolation buffer; a multi-tick default leaves followers lagging and the train appears to tear.
+                // A distant train stays tracked and visible; the send interval is left at the default so followers keep dead-reckoning off their velocity between packets and stay as fresh as the ridden car.
                 .maxTrackingRange(10)
-                .trackingTickInterval(1)
                 .build(key)
         );
     }
