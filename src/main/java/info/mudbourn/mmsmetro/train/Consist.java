@@ -66,6 +66,9 @@ public final class Consist {
     // True after the head has crossed the ring seam at least once, so followers only wrap around the ring once the whole train has committed to it (never while the lead-in spur is still being ridden).
     private boolean ringCommitted;
 
+    // Fraction of full braking used for the bump-armed ease-down, gentler than the safety brake so the glide into a platform is smooth.
+    private static final double EASE_BRAKE_FRACTION = 0.35;
+
     // Ticks the train holds after sounding its departure horn before it actually pulls out (3 seconds).
     private static final int DEPART_DELAY_TICKS = 60;
 
@@ -217,10 +220,10 @@ public final class Consist {
         if (remaining <= brakingDistance) {
             this.speed = Math.max(0.0, this.speed - this.config.acceleration);
         } else if (easeToStation) {
-            // Decelerate just enough to reach zero at the station arc, never harder than a full brake.
+            // Clamp to the speed that still stops at the platform under a gentle brake, so an early-armed ease-down glides in on a profile instead of collapsing into an asymptotic crawl.
             double stopDist = Math.max(1.0e-3, stationArc - this.headArc);
-            double needed = (this.speed * this.speed) / (2.0 * stopDist);
-            this.speed = Math.max(0.0, this.speed - Math.min(needed, this.config.acceleration));
+            double allowed = Math.sqrt(2.0 * this.config.acceleration * EASE_BRAKE_FRACTION * stopDist);
+            this.speed = Math.min(this.speed + this.config.acceleration, Math.min(this.config.maxSpeed, allowed));
         } else {
             this.speed = Math.min(this.config.maxSpeed, this.speed + this.config.acceleration);
         }

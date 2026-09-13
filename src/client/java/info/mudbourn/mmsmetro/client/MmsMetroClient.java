@@ -59,10 +59,11 @@ public class MmsMetroClient implements ClientModInitializer {
             int cx = car.getBlockPos().getX() >> 4;
             int cz = car.getBlockPos().getZ() >> 4;
             boolean chunkLoaded = world.getChunkManager().isChunkLoaded(cx, cz);
+            long sinceRenderMs = System.currentTimeMillis() - car.lastRenderMs;
             MmsMetro.LOGGER.info(String.format(
-                "[diag-scan] idx %d age %d arc %.3f pos (%.2f,%.2f,%.2f) chunkLoaded %b removed %b",
+                "[diag-scan] idx %d age %d arc %.3f pos (%.2f,%.2f,%.2f) chunkLoaded %b removed %b sinceRenderMs %d",
                 car.getCarIndex(), car.clientAge(), car.getArcLength(),
-                car.getX(), car.getY(), car.getZ(), chunkLoaded, car.isRemoved()));
+                car.getX(), car.getY(), car.getZ(), chunkLoaded, car.isRemoved(), sinceRenderMs));
         }
     }
 }

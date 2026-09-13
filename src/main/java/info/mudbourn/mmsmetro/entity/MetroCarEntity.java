@@ -288,6 +288,9 @@ public class MetroCarEntity extends Entity {
         return this.age;
     }
 
+    // Wall-clock millis of the last frame the renderer drew this car, stamped client-side so the scan can flag a car that is present but has stopped being drawn.
+    public long lastRenderMs;
+
     // First eight characters of the consist id, enough to group a train's cars in the log.
     private String shortId() {
         String s = this.consistId.toString();
