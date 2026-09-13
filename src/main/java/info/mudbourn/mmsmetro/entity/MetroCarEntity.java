@@ -59,6 +59,10 @@ public class MetroCarEntity extends Entity {
     private static final TrackedData<Boolean> HUD_ARRIVING =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
 
+    // The consist id as a string, tracked so the client can group a train's cars and let a follower find its lead to render along the lead's trail.
+    private static final TrackedData<String> CONSIST_ID =
+        DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.STRING);
+
     // Client-side interpolation of the tracked orientation.
     private float prevPathYaw;
     private float prevPathPitch;
@@ -104,6 +108,24 @@ public class MetroCarEntity extends Entity {
         builder.add(HUD_WAITING, false);
         builder.add(HUD_LINE_COLOR, 0xFFF5A623);
         builder.add(HUD_ARRIVING, false);
+        builder.add(CONSIST_ID, "");
+    }
+
+    // Mirrors a synced consist id onto the client-side field so findLead groups this car with its consist.
+    @Override
+    public void onTrackedDataSet(TrackedData<?> data) {
+        super.onTrackedDataSet(data);
+        if (CONSIST_ID.equals(data)) {
+            String synced = this.dataTracker.get(CONSIST_ID);
+            if (!synced.isEmpty()) {
+                try {
+                    this.consistId = java.util.UUID.fromString(synced);
+                    this.cachedLead = null;
+                } catch (IllegalArgumentException ignored) {
+                    // Keep the current id if the synced value is corrupt.
+                }
+            }
+        }
     }
 
     public String getHudLine() {
@@ -352,6 +374,7 @@ public class MetroCarEntity extends Entity {
 
     public void setConsistId(java.util.UUID value) {
         this.consistId = value;
+        this.dataTracker.set(CONSIST_ID, value.toString());
     }
 
     public int getCarIndex() {
@@ -387,7 +410,7 @@ public class MetroCarEntity extends Entity {
         String stored = view.getString("ConsistId", "");
         if (!stored.isEmpty()) {
             try {
-                this.consistId = java.util.UUID.fromString(stored);
+                this.setConsistId(java.util.UUID.fromString(stored));
             } catch (IllegalArgumentException ignored) {
                 // Keep the freshly generated id if the stored value is corrupt.
             }
