@@ -1,6 +1,7 @@
 package info.mudbourn.mmsmetro.client.render;
 
 import info.mudbourn.mmsmetro.entity.MetroCarEntity;
+import net.minecraft.client.render.Frustum;
 import net.minecraft.client.render.OverlayTexture;
 import net.minecraft.client.render.command.OrderedRenderCommandQueue;
 import net.minecraft.client.render.entity.EntityRenderer;
@@ -25,6 +26,12 @@ public class MetroCarEntityRenderer extends EntityRenderer<MetroCarEntity, Metro
 
         this.shadowRadius = 0.7f;
         this.model = new MinecartEntityModel(ctx.getPart(EntityModelLayers.MINECART));
+    }
+
+    // Never frustum-cull a car; it is teleport-driven, so its cull box can lag the body a frame and blink a mid-train car out while it sits in full view.
+    @Override
+    public boolean shouldRender(MetroCarEntity entity, Frustum frustum, double cameraX, double cameraY, double cameraZ) {
+        return true;
     }
 
     @Override
