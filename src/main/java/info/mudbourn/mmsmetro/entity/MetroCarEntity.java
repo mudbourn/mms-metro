@@ -63,6 +63,16 @@ public class MetroCarEntity extends Entity {
     private static final TrackedData<String> CONSIST_ID =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.STRING);
 
+    // Path position carried through the DataTracker, the one channel that reaches the client every tick even when vanilla suppresses movement packets for a car near a ridden vehicle; the client drives the body from these rather than from entity-movement packets.
+    private static final TrackedData<Float> POS_X =
+        DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.FLOAT);
+
+    private static final TrackedData<Float> POS_Y =
+        DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.FLOAT);
+
+    private static final TrackedData<Float> POS_Z =
+        DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.FLOAT);
+
     // Client-side interpolation of the tracked orientation.
     private float prevPathYaw;
     private float prevPathPitch;
@@ -103,9 +113,23 @@ public class MetroCarEntity extends Entity {
         builder.add(HUD_LINE_COLOR, 0xFFF5A623);
         builder.add(HUD_ARRIVING, false);
         builder.add(CONSIST_ID, "");
+        builder.add(POS_X, 0.0f);
+        builder.add(POS_Y, 0.0f);
+        builder.add(POS_Z, 0.0f);
     }
 
-    // Mirrors a synced consist id onto the client-side field so a car can be traced to its whole consist.
+    // Server-side: publishes this tick's path position onto the DataTracker so every tracking client can drive the body from it.
+    public void setTrackedPos(double x, double y, double z) {
+        this.dataTracker.set(POS_X, (float) x);
+        this.dataTracker.set(POS_Y, (float) y);
+        this.dataTracker.set(POS_Z, (float) z);
+    }
+
+    private Vec3d trackedPos() {
+        return new Vec3d(this.dataTracker.get(POS_X), this.dataTracker.get(POS_Y), this.dataTracker.get(POS_Z));
+    }
+
+    // Mirrors synced tracker fields onto the client: the consist id for grouping, and the path position (arriving last of the three) as the interpolation target that drives the body.
     @Override
     public void onTrackedDataSet(TrackedData<?> data) {
         super.onTrackedDataSet(data);
@@ -118,6 +142,8 @@ public class MetroCarEntity extends Entity {
                     // Keep the current id if the synced value is corrupt.
                 }
             }
+        } else if (POS_Z.equals(data) && this.getEntityWorld().isClient()) {
+            this.interpolator.refreshPositionAndAngles(trackedPos(), this.getYaw(), this.getPitch());
         }
     }
 
@@ -232,7 +258,8 @@ public class MetroCarEntity extends Entity {
     private void snapOnDiscontinuity() {
         float arc = this.getArcLength();
         if (Math.abs(arc - this.lastClientArc) > ARC_DISCONTINUITY) {
-            this.interpolator.refreshPositionAndAngles(this.getEntityPos(), this.getYaw(), this.getPitch());
+            this.interpolator.clear();
+            this.refreshPositionAndAngles(trackedPos(), this.getYaw(), this.getPitch());
             this.prevPathYaw = this.getPathYaw();
             this.prevPathPitch = this.getPathPitch();
         }

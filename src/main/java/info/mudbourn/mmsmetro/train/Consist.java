@@ -8,7 +8,6 @@ import info.mudbourn.mmsmetro.path.PathStation;
 import info.mudbourn.mmsmetro.path.RailPath;
 import info.mudbourn.mmsmetro.registry.ModSounds;
 import net.minecraft.entity.Entity;
-import net.minecraft.network.packet.s2c.play.EntityPositionSyncS2CPacket;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.sound.SoundCategory;
 import net.minecraft.sound.SoundEvent;
@@ -417,8 +416,6 @@ public final class Consist {
         boolean onRing = this.loop && len > 0.0 && (back == 0.0 || this.ringCommitted);
         BlockPos pathOrigin = this.path.origin();
         Direction pathInitialDir = this.path.initialDir();
-        // Every car's tracker send is forced from this world each tick so a follower's client copy never dead-reckons stale behind the ridden car and drops out of the loaded region.
-        ServerWorld world = leadWorld();
         // Once a second, log the authoritative spacing so a client-side gap can be checked against a server that keeps the cars evenly spaced.
         boolean logNow = this.diagTick++ % 20 == 0;
         Vec3d prevCarPos = null;
@@ -434,24 +431,19 @@ public final class Consist {
             }
             PathPoint point = this.path.sample(arc);
             MetroCarEntity car = this.cars.get(i);
-            Vec3d previous = car.getEntityPos();
             car.setPosition(point.pos().x, point.pos().y, point.pos().z);
             car.setYaw(point.yaw());
             car.setPitch(point.pitch());
             car.setPathYaw(point.yaw());
             car.setPathPitch(point.pitch());
-            // Report this tick's movement as velocity so the client carries a seated rider along instead of leaving them a few ticks behind the teleported position.
-            car.setVelocity(point.pos().subtract(previous));
+            // Publish the position through the DataTracker, the channel that reaches the client every tick even while a rider is aboard; the client drives the body from this, not from vanilla movement packets.
+            car.setTrackedPos(point.pos().x, point.pos().y, point.pos().z);
             car.setArcLength((float) arc);
             car.setPathIdentity(pathOrigin, pathInitialDir);
             car.setHudInfo(this.currentLine, this.currentDirection, nextName, waiting, this.currentLineColor, arriving);
             // Re-seat riders onto the car's new position this same tick, so entity tick order never leaves them a tick behind.
             for (Entity passenger : car.getPassengerList()) {
                 car.updatePassengerPosition(passenger);
-            }
-            // Push an absolute position to every player tracking the car so the whole consist stays synced as a unit with the rider, not just the car being ridden.
-            if (world != null) {
-                world.getChunkManager().sendToNearbyPlayers(car, EntityPositionSyncS2CPacket.create(car));
             }
             if (logNow) {
                 double gap = prevCarPos == null ? 0.0 : point.pos().subtract(prevCarPos).length();
