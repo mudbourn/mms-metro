@@ -240,6 +240,18 @@ public class MetroCarEntity extends Entity {
         return this.interpolator;
     }
 
+    // Logs on the client when a car leaves the world, so a train that renders with too few cars can be traced to the removal reason and tick it happened on.
+    @Override
+    public void remove(Entity.RemovalReason reason) {
+        if (this.getEntityWorld().isClient()) {
+            info.mudbourn.mmsmetro.MmsMetro.LOGGER.info(String.format(
+                "[diag-remove] cid %s idx %d reason %s age %d pos (%.2f,%.2f,%.2f)",
+                shortId(), this.getCarIndex(), reason, this.age,
+                this.getX(), this.getY(), this.getZ()));
+        }
+        super.remove(reason);
+    }
+
     // Appends this tick's client position to the trail, restarting it on a discontinuity (a terminus flip or a chunk-reload teleport) and trimming the far end to the keep distance.
     private void recordTrail() {
         double x = this.getX();

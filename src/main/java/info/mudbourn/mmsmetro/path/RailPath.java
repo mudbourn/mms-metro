@@ -23,7 +23,7 @@ import java.util.Map;
 public final class RailPath {
 
     // Default cap on how far a path is walked from its origin, in rail nodes.
-    public static final int MAX_NODES = 512;
+    public static final int MAX_NODES = 4096;
 
     private final List<Vec3d> points;
 
