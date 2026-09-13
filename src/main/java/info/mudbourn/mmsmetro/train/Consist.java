@@ -8,6 +8,7 @@ import info.mudbourn.mmsmetro.path.PathStation;
 import info.mudbourn.mmsmetro.path.RailPath;
 import info.mudbourn.mmsmetro.registry.ModSounds;
 import net.minecraft.entity.Entity;
+import net.minecraft.network.packet.s2c.play.EntityPositionSyncS2CPacket;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.sound.SoundCategory;
 import net.minecraft.sound.SoundEvent;
@@ -416,6 +417,8 @@ public final class Consist {
         boolean onRing = this.loop && len > 0.0 && (back == 0.0 || this.ringCommitted);
         BlockPos pathOrigin = this.path.origin();
         Direction pathInitialDir = this.path.initialDir();
+        // Every car's tracker send is forced from this world each tick so a follower's client copy never dead-reckons stale behind the ridden car and drops out of the loaded region.
+        ServerWorld world = leadWorld();
         // Once a second, log the authoritative spacing so a client-side gap can be checked against a server that keeps the cars evenly spaced.
         boolean logNow = this.diagTick++ % 20 == 0;
         Vec3d prevCarPos = null;
@@ -445,6 +448,10 @@ public final class Consist {
             // Re-seat riders onto the car's new position this same tick, so entity tick order never leaves them a tick behind.
             for (Entity passenger : car.getPassengerList()) {
                 car.updatePassengerPosition(passenger);
+            }
+            // Push an absolute position to every player tracking the car so the whole consist stays synced as a unit with the rider, not just the car being ridden.
+            if (world != null) {
+                world.getChunkManager().sendToNearbyPlayers(car, EntityPositionSyncS2CPacket.create(car));
             }
             if (logNow) {
                 double gap = prevCarPos == null ? 0.0 : point.pos().subtract(prevCarPos).length();
