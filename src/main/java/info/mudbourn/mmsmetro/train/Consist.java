@@ -115,12 +115,17 @@ public final class Consist {
 
     // Seeds line/colour from the next station ahead so the HUD reads right before the train serves its first stop; direction is the travel heading until the first departure adopts a departed stop's label.
     private void adoptIdentityFromNextStation() {
+        adoptLineFromNextStation();
+        applyTravelHeading();
+    }
+
+    // Seeds only line and colour from the next station ahead, leaving the direction readout as it stands.
+    private void adoptLineFromNextStation() {
         PathStation next = nextStation();
         if (next != null) {
             this.currentLine = next.line();
             this.currentLineColor = lineColorArgb(next.lineColor());
         }
-        applyTravelHeading();
     }
 
     // Sets the readout to the compass heading of travel at the head, the direction shown on any leg not covered by a departed stop's fixed label.
@@ -261,8 +266,8 @@ public final class Consist {
             } else if (target != null) {
                 arriveAt(target);
             } else {
-                // Reached the end of the track with no station ahead: shuttle back.
-                reverse();
+                // Reached the end of the track with no station ahead: shuttle back and take the new heading.
+                reverse(false);
             }
             return;
         }
@@ -353,9 +358,9 @@ public final class Consist {
             this.departing = false;
             this.phase = Phase.RUNNING;
             if (this.reverseAfterDwell) {
-                // The station commanded a turn-around: rebuild the path the other way.
+                // The station commanded a turn-around: rebuild the path the other way, holding the return direction the horn set.
                 this.reverseAfterDwell = false;
-                reverse();
+                reverse(true);
             } else {
                 this.nextStationIndex++;
             }
@@ -505,8 +510,8 @@ public final class Consist {
         return sb.toString();
     }
 
-    // Turns the train around: rebuild the path back the way it came, flip the car order so the old tail leads, and re-seat every car; used at termini and dead ends so it shuttles instead of parking.
-    private void reverse() {
+    // Turns the train around: rebuild the path back the way it came, flip the car order so the old tail leads, and re-seat every car; used at termini and dead ends so it shuttles instead of parking. keepDirection holds the readout the departure horn already set for the return leg, so a terminus turn-around does not snap it back to the heading of the curve it sits on.
+    private void reverse(boolean keepDirection) {
         ServerWorld world = leadWorld();
         if (world == null || this.cars.isEmpty()) {
             this.speed = 0.0;
@@ -544,7 +549,11 @@ public final class Consist {
         this.ringCommitted = false;
         this.nextStationIndex = firstStationAhead(this.headArc);
         this.firedThroughArc = this.headArc;
-        adoptIdentityFromNextStation();
+        if (keepDirection) {
+            adoptLineFromNextStation();
+        } else {
+            adoptIdentityFromNextStation();
+        }
         applyCarPositions();
     }
 
