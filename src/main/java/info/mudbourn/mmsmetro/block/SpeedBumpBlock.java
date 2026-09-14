@@ -35,12 +35,16 @@ public class SpeedBumpBlock extends BlockWithEntity {
     @Override
     protected ActionResult onUse(BlockState state, World world, BlockPos pos,
                                  PlayerEntity player, BlockHitResult hit) {
+        // Only operators edit the metro markers; everyone else interacts with it as a plain block.
+        if (!MetroNetworking.canOperate(player)) {
+            return ActionResult.PASS;
+        }
         if (world.isClient()) {
             return ActionResult.SUCCESS;
         }
         if (player instanceof ServerPlayerEntity serverPlayer
             && world.getBlockEntity(pos) instanceof SpeedBumpBlockEntity bump) {
-            MetroNetworking.openBump(serverPlayer, pos, bump.getDirection());
+            MetroNetworking.openBump(serverPlayer, pos, bump.getDirection(), bump.getStationKey());
         }
         return ActionResult.SUCCESS;
     }

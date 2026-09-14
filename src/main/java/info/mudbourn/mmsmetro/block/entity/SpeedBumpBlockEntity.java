@@ -12,6 +12,9 @@ public class SpeedBumpBlockEntity extends BlockEntity {
 
     private String direction = "";
 
+    // Exact tether key of the station this bump heralds (e.g. "FortKelvin_S"); when set it overrides direction matching and binds the bump to that one station.
+    private String stationKey = "";
+
     public SpeedBumpBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.SPEED_BUMP, pos, state);
     }
@@ -25,15 +28,26 @@ public class SpeedBumpBlockEntity extends BlockEntity {
         this.markDirty();
     }
 
+    public String getStationKey() {
+        return this.stationKey;
+    }
+
+    public void setStationKey(String value) {
+        this.stationKey = value;
+        this.markDirty();
+    }
+
     @Override
     protected void readData(ReadView view) {
         super.readData(view);
         this.direction = view.getString("Direction", "");
+        this.stationKey = view.getString("StationKey", "");
     }
 
     @Override
     protected void writeData(WriteView view) {
         super.writeData(view);
         view.putString("Direction", this.direction);
+        view.putString("StationKey", this.stationKey);
     }
 }

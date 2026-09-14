@@ -22,7 +22,8 @@ public final class ModEntities {
             Registries.ENTITY_TYPE,
             id,
             EntityType.Builder.create(MetroCarEntity::new, SpawnGroup.MISC)
-                .dimensions(1.4f, 1.4f)
+                // Tall enough that a seated rider's eye line sits inside the box, so a level look at the next car targets it and cars can be hopped while stopped, not only while motion jitters the ray onto a short box.
+                .dimensions(1.4f, 2.0f)
                 // A distant train stays tracked and visible; the send interval is left at the default so followers keep dead-reckoning off their velocity between packets and stay as fresh as the ridden car.
                 .maxTrackingRange(10)
                 .build(key)

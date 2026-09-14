@@ -6,8 +6,11 @@ import info.mudbourn.mmsmetro.block.SpeedBumpBlock;
 import info.mudbourn.mmsmetro.block.entity.JunctionBlockEntity;
 import info.mudbourn.mmsmetro.block.entity.SpeedBumpBlockEntity;
 import info.mudbourn.mmsmetro.block.entity.StationBlockEntity;
+import info.mudbourn.mmsmetro.path.RailPath;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.server.command.CommandManager;
 import net.minecraft.network.RegistryByteBuf;
 import net.minecraft.network.codec.PacketCodec;
 import net.minecraft.network.packet.CustomPayload;
@@ -88,16 +91,32 @@ public final class MetroNetworking {
         }
     }
 
-    // Server->client: open the speed-bump editor.
-    public record OpenBumpScreen(BlockPos pos, String direction) implements CustomPayload {
+    // Server->client: open the speed-bump editor, with the tether keys of every stop reachable from this bump for the dropdown.
+    public record OpenBumpScreen(BlockPos pos, String direction, String stationKey,
+                                 java.util.List<String> stationKeys) implements CustomPayload {
         public static final Id<OpenBumpScreen> ID =
             new Id<>(Identifier.of(MmsMetro.MOD_ID, "open_bump"));
         public static final PacketCodec<RegistryByteBuf, OpenBumpScreen> CODEC = PacketCodec.of(
             (v, buf) -> {
                 buf.writeBlockPos(v.pos);
                 buf.writeString(v.direction);
+                buf.writeString(v.stationKey);
+                buf.writeVarInt(v.stationKeys.size());
+                for (String key : v.stationKeys) {
+                    buf.writeString(key);
+                }
             },
-            buf -> new OpenBumpScreen(buf.readBlockPos(), buf.readString()));
+            buf -> {
+                BlockPos pos = buf.readBlockPos();
+                String direction = buf.readString();
+                String stationKey = buf.readString();
+                int count = buf.readVarInt();
+                java.util.List<String> keys = new java.util.ArrayList<>(count);
+                for (int i = 0; i < count; i++) {
+                    keys.add(buf.readString());
+                }
+                return new OpenBumpScreen(pos, direction, stationKey, keys);
+            });
 
         @Override
         public Id<? extends CustomPayload> getId() {
@@ -106,15 +125,16 @@ public final class MetroNetworking {
     }
 
     // Client->server: apply the edited speed-bump values.
-    public record BumpEdit(BlockPos pos, String direction) implements CustomPayload {
+    public record BumpEdit(BlockPos pos, String direction, String stationKey) implements CustomPayload {
         public static final Id<BumpEdit> ID =
             new Id<>(Identifier.of(MmsMetro.MOD_ID, "bump_edit"));
         public static final PacketCodec<RegistryByteBuf, BumpEdit> CODEC = PacketCodec.of(
             (v, buf) -> {
                 buf.writeBlockPos(v.pos);
                 buf.writeString(v.direction);
+                buf.writeString(v.stationKey);
             },
-            buf -> new BumpEdit(buf.readBlockPos(), buf.readString()));
+            buf -> new BumpEdit(buf.readBlockPos(), buf.readString(), buf.readString()));
 
         @Override
         public Id<? extends CustomPayload> getId() {
@@ -197,9 +217,44 @@ public final class MetroNetworking {
             station.isHub(), station.isTerminus(), station.getDwellTicks()));
     }
 
-    // Sends the speed-bump editor to a player looking at a bump block.
-    public static void openBump(ServerPlayerEntity player, BlockPos pos, String direction) {
-        ServerPlayNetworking.send(player, new OpenBumpScreen(pos, direction));
+    // Sends the speed-bump editor to a player looking at a bump block, with the reachable stops' tether keys for the dropdown.
+    public static void openBump(ServerPlayerEntity player, BlockPos pos, String direction, String stationKey) {
+        ServerPlayNetworking.send(player, new OpenBumpScreen(pos, direction, stationKey,
+            discoverStationKeys(player.getEntityWorld(), pos)));
+    }
+
+    // Tether keys the editor offers for a bump: the stops within DISCOVER_RADIUS blocks of it, found by walking the line from the nearest rail in each heading, so a network of hundreds of stops still lists only the handful near this bump.
+    private static final double DISCOVER_RADIUS_SQ = 128.0 * 128.0;
+
+    private static java.util.List<String> discoverStationKeys(ServerWorld world, BlockPos bumpPos) {
+        BlockPos rail = nearestRail(world, bumpPos);
+        if (rail == null) {
+            return java.util.List.of();
+        }
+        java.util.TreeSet<String> keys = new java.util.TreeSet<>();
+        for (Direction dir : Direction.Type.HORIZONTAL) {
+            keys.addAll(RailPath.build(world, rail, dir, RailPath.MAX_NODES)
+                .stationKeysWithin(bumpPos, DISCOVER_RADIUS_SQ));
+        }
+        return new java.util.ArrayList<>(keys);
+    }
+
+    // Nearest rail to a bump within its horizontal reach and a couple of blocks either way vertically, so a bump placed beside or under the track still finds its line.
+    private static BlockPos nearestRail(ServerWorld world, BlockPos bumpPos) {
+        int r = 4;
+        BlockPos best = null;
+        double bestSq = Double.MAX_VALUE;
+        for (BlockPos pos : BlockPos.iterate(bumpPos.add(-r, -2, -r), bumpPos.add(r, 2, r))) {
+            if (!net.minecraft.block.AbstractRailBlock.isRail(world, pos)) {
+                continue;
+            }
+            double sq = pos.getSquaredDistance(bumpPos);
+            if (sq < bestSq) {
+                bestSq = sq;
+                best = pos.toImmutable();
+            }
+        }
+        return best;
     }
 
     // Sends the junction editor pre-filled with the current per-approach routing.
@@ -239,6 +294,7 @@ public final class MetroNetworking {
         if (world.getBlockState(edit.pos()).getBlock() instanceof SpeedBumpBlock
             && world.getBlockEntity(edit.pos()) instanceof SpeedBumpBlockEntity bump) {
             bump.setDirection(edit.direction());
+            bump.setStationKey(edit.stationKey());
         }
     }
 
@@ -258,6 +314,12 @@ public final class MetroNetworking {
 
     // Guards an incoming edit: the target must be within reach, so a client can only edit a block it could actually right-click.
     private static boolean canEdit(ServerPlayerEntity player, BlockPos pos) {
-        return player.squaredDistanceTo(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5) <= EDIT_REACH_SQ;
+        return canOperate(player)
+            && player.squaredDistanceTo(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5) <= EDIT_REACH_SQ;
+    }
+
+    // True when a player may edit the metro markers: the gamemaster permission the /metro command also requires.
+    public static boolean canOperate(PlayerEntity player) {
+        return CommandManager.GAMEMASTERS_CHECK.allows(player.getPermissions());
     }
 }

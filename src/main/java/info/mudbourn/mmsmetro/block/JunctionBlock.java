@@ -35,6 +35,10 @@ public class JunctionBlock extends BlockWithEntity {
     @Override
     protected ActionResult onUse(BlockState state, World world, BlockPos pos,
                                  PlayerEntity player, BlockHitResult hit) {
+        // Only operators edit the metro markers; everyone else interacts with it as a plain block.
+        if (!MetroNetworking.canOperate(player)) {
+            return ActionResult.PASS;
+        }
         if (world.isClient()) {
             return ActionResult.SUCCESS;
         }

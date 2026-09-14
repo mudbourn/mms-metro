@@ -30,13 +30,18 @@ public final class ModBlocks {
 
     public static void register() {
         STATION = register("station_block", StationBlock::new,
-            AbstractBlock.Settings.copy(Blocks.IRON_BLOCK));
+            operatorGear(AbstractBlock.Settings.copy(Blocks.IRON_BLOCK)));
         SPEAKER = register("speaker_block", SpeakerBlock::new,
-            AbstractBlock.Settings.copy(Blocks.NOTE_BLOCK));
+            operatorGear(AbstractBlock.Settings.copy(Blocks.NOTE_BLOCK)));
         SPEED_BUMP = register("speed_bump", SpeedBumpBlock::new,
-            AbstractBlock.Settings.copy(Blocks.SMOOTH_STONE));
+            operatorGear(AbstractBlock.Settings.copy(Blocks.SMOOTH_STONE)));
         JUNCTION = register("junction_block", JunctionBlock::new,
-            AbstractBlock.Settings.copy(Blocks.SMOOTH_STONE));
+            operatorGear(AbstractBlock.Settings.copy(Blocks.SMOOTH_STONE)));
+    }
+
+    // Command-block-style strength: unbreakable and blast-proof for anyone in survival, still removable in creative.
+    private static AbstractBlock.Settings operatorGear(AbstractBlock.Settings settings) {
+        return settings.strength(-1.0F, 3600000.0F);
     }
 
     private static Block register(String name, Function<AbstractBlock.Settings, Block> factory,

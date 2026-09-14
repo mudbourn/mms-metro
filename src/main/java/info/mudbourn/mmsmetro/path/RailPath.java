@@ -115,16 +115,13 @@ public final class RailPath {
             }
             double arc = this.cumulative[bump.nodeIndex];
             String heading = headingName(arc);
-            // A case-sensitive "T_" prefix is terminus mode: the bump heralds the nearest terminus whose label matches the rest of the entry, so a bump before a turn-around names the direction the terminus departs on (its NORTHBOUND label) rather than the SOUTHBOUND heading the train arrives on.
-            boolean terminusMode = bump.direction.startsWith("T_");
-            String wanted = terminusMode ? bump.direction.substring(2) : bump.direction;
-            // A directed bump heralds the first stop ahead whose direction readout it matches: the stop's fixed label when set, else the track's heading of travel here, so it fires on the right pass and lines up with fixed-label stations.
+            // A bump heralds the first stop ahead it targets: an exact station-key tether when set, else the typed direction (T_ terminus mode included) matched against the stop's readout, so it fires on the right pass and lines up with fixed-label stations.
             PathStation ahead = null;
             for (PathStation station : this.stations) {
                 if (station.arc() <= arc + 1.0e-3) {
                     continue;
                 }
-                if (!bumpMatches(terminusMode, wanted, station, heading)) {
+                if (!bumpHeralds(bump, station, heading)) {
                     continue;
                 }
                 ahead = station;
@@ -133,7 +130,7 @@ public final class RailPath {
             // On a ring a bump past the last station heralds the first matching station across the seam, so wrap to the start rather than dropping it.
             if (ahead == null && this.loop) {
                 for (PathStation station : this.stations) {
-                    if (!bumpMatches(terminusMode, wanted, station, heading)) {
+                    if (!bumpHeralds(bump, station, heading)) {
                         continue;
                     }
                     ahead = station;
@@ -165,6 +162,17 @@ public final class RailPath {
         return this.stations;
     }
 
+    // Tether keys of the stops within a distance of a point, for the speed-bump editor to offer as a dropdown of nearby targets rather than the whole network.
+    public List<String> stationKeysWithin(BlockPos center, double maxDistanceSq) {
+        List<String> keys = new ArrayList<>();
+        for (PathStation station : this.stations) {
+            if (station.pos().getSquaredDistance(center) <= maxDistanceSq) {
+                keys.add(stationKey(station));
+            }
+        }
+        return keys;
+    }
+
     // Announcement triggers along this path, ordered from the head of the path.
     public List<PathBump> bumps() {
         return this.bumps;
@@ -178,7 +186,7 @@ public final class RailPath {
     }
 
     // A speed bump found at a node, before arc-lengths are known.
-    private record BumpMark(int nodeIndex, String direction) {
+    private record BumpMark(int nodeIndex, String direction, String stationKey) {
     }
 
     public PathPoint sample(double s) {
@@ -243,6 +251,26 @@ public final class RailPath {
         return station.fixedDirection() && !station.direction().isEmpty()
             ? station.direction()
             : heading;
+    }
+
+    // True when a bump should herald this station: a filled station-key tether is an exact, case-sensitive match that overrides direction matching and pins the bump to one station; otherwise the typed direction (with T_ terminus mode) is matched against the station's readout.
+    private boolean bumpHeralds(BumpMark bump, PathStation station, String heading) {
+        if (!bump.stationKey.isEmpty()) {
+            return bump.stationKey.equals(stationKey(station));
+        }
+        boolean terminusMode = bump.direction.startsWith("T_");
+        String wanted = terminusMode ? bump.direction.substring(2) : bump.direction;
+        return bumpMatches(terminusMode, wanted, station, heading);
+    }
+
+    // The tether key a bump targets a station by: the station name with every non-alphanumeric character stripped, an underscore, then the first letter of its direction readout (fixed label or travel heading), so "Fort Kelvin" southbound is "FortKelvin_S". Case-sensitive, so the bump field must match exactly.
+    private String stationKey(PathStation station) {
+        String name = station.name().replaceAll("[^A-Za-z0-9]", "");
+        String readout = stationReadout(station, headingName(station.arc()));
+        if (readout.isEmpty()) {
+            return name + "_";
+        }
+        return name + "_" + readout.substring(0, 1).toUpperCase(java.util.Locale.ROOT);
     }
 
     // True when a bump should herald this station: terminus mode also requires the station be a terminus, and either mode still matches the wanted label against the station's readout, with an empty label matching any.
@@ -370,10 +398,14 @@ public final class RailPath {
         }
         for (Map.Entry<BlockPos, List<double[]>> entry : bumpHits.entrySet()) {
             BlockPos pos = entry.getKey();
-            String direction = world.getBlockEntity(pos) instanceof SpeedBumpBlockEntity bump
-                ? bump.getDirection() : "";
+            String direction = "";
+            String stationKey = "";
+            if (world.getBlockEntity(pos) instanceof SpeedBumpBlockEntity bump) {
+                direction = bump.getDirection();
+                stationKey = bump.getStationKey();
+            }
             for (int nodeIndex : nearestPerPass(entry.getValue())) {
-                outBumps.add(new BumpMark(nodeIndex, direction));
+                outBumps.add(new BumpMark(nodeIndex, direction, stationKey));
             }
         }
     }

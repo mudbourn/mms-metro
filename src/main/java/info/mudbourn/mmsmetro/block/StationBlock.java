@@ -32,12 +32,14 @@ public class StationBlock extends BlockWithEntity {
         return new StationBlockEntity(pos, state);
     }
 
-    // Right-clicking opens the station editor, where every field — name, line,
-    // direction, next stop, exit, transfers, dwell, and the terminus command —
-    // can be edited at once.
+    // Right-clicking opens the station editor for operators, where every field is edited at once.
     @Override
     protected ActionResult onUse(BlockState state, World world, BlockPos pos,
                                  PlayerEntity player, BlockHitResult hit) {
+        // Only operators edit the metro markers; everyone else interacts with it as a plain block.
+        if (!MetroNetworking.canOperate(player)) {
+            return ActionResult.PASS;
+        }
         if (world.isClient()) {
             return ActionResult.SUCCESS;
         }
