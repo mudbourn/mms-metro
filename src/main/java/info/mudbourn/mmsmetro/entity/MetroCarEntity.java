@@ -83,8 +83,16 @@ public class MetroCarEntity extends Entity {
     // An arc step larger than this between ticks is a rewrite of the path, not motion, so the car hard-snaps to its new pose.
     private static final float ARC_DISCONTINUITY = 8.0f;
 
-    // Held only to satisfy the vanilla getInterpolator contract; the car's client position is driven directly from the tracked path position in tick(), never through this interpolator, which wedges on fast turns.
-    private final PositionInterpolator interpolator = new PositionInterpolator(this, 1);
+    // A no-op interpolator returned to vanilla so incoming movement packets cannot move the car; its client position comes solely from the tracked path position (in tick() and onTrackedDataSet), and letting vanilla's interpolation also drive the body made it jitter between the two.
+    private final PositionInterpolator interpolator = new PositionInterpolator(this, 1) {
+        @Override
+        public void refreshPositionAndAngles(Vec3d pos, float yaw, float pitch) {
+        }
+
+        @Override
+        public void tick() {
+        }
+    };
 
     // Groups the cars of one train so a car can be traced to its whole consist even after a reload, when the in-memory registry is gone.
     private java.util.UUID consistId = java.util.UUID.randomUUID();
