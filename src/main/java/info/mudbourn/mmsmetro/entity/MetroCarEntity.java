@@ -83,16 +83,8 @@ public class MetroCarEntity extends Entity {
     // An arc step larger than this between ticks is a rewrite of the path, not motion, so the car hard-snaps to its new pose.
     private static final float ARC_DISCONTINUITY = 8.0f;
 
-    // A no-op interpolator returned to vanilla so incoming movement packets cannot move the car; its client position comes solely from the tracked path position (in tick() and onTrackedDataSet), and letting vanilla's interpolation also drive the body made it jitter between the two.
-    private final PositionInterpolator interpolator = new PositionInterpolator(this, 1) {
-        @Override
-        public void refreshPositionAndAngles(Vec3d pos, float yaw, float pitch) {
-        }
-
-        @Override
-        public void tick() {
-        }
-    };
+    // Smooths the car's position between the consist's per-tick teleports so the body and its riders advance together over the tracking interval instead of the rider trailing the car.
+    private final PositionInterpolator interpolator = new PositionInterpolator(this, 1);
 
     // Groups the cars of one train so a car can be traced to its whole consist even after a reload, when the in-memory registry is gone.
     private java.util.UUID consistId = java.util.UUID.randomUUID();
@@ -142,7 +134,7 @@ public class MetroCarEntity extends Entity {
         return trackedPos();
     }
 
-    // Applies synced state as it arrives: the consist id for grouping, and the path position straight onto the body so a car keeps moving even when the client has stopped ticking it (a tail car that lagged out of entity-tick range would otherwise freeze off the rail while its tracker still updates).
+    // Mirrors the synced consist id onto the client so its cars group even after a reload; the tracked path position is read straight off the tracker each tick in tick(), so it needs no per-field callback.
     @Override
     public void onTrackedDataSet(TrackedData<?> data) {
         super.onTrackedDataSet(data);
@@ -155,10 +147,6 @@ public class MetroCarEntity extends Entity {
                     // Keep the current id if the synced value is corrupt.
                 }
             }
-        } else if (this.getEntityWorld().isClient()
-            && (POS_X.equals(data) || POS_Y.equals(data) || POS_Z.equals(data))) {
-            Vec3d tp = trackedPos();
-            this.setPosition(tp.x, tp.y, tp.z);
         }
     }
 
@@ -258,17 +246,11 @@ public class MetroCarEntity extends Entity {
     @Override
     public void tick() {
         super.tick();
-        // On the client, drive the body straight off the synced path position each tick; the render lerp smooths between the per-tick updates, and the vanilla interpolator is not used because it wedges on fast turns and strands a car off the rail.
+        // On the client, advance the interpolator so the car eases between tracked packets and its riders stay glued to it; the server drives position from the consist.
         if (this.getEntityWorld().isClient()) {
-            Vec3d tp = trackedPos();
-            if (isDiscontinuity()) {
-                // A terminus reverse or reload teleport jumps the body; reset the render baseline so it snaps to the new pose instead of sliding across the gap.
-                this.refreshPositionAndAngles(tp.x, tp.y, tp.z, this.getYaw(), this.getPitch());
-                this.prevPathYaw = this.getPathYaw();
-                this.prevPathPitch = this.getPathPitch();
-            } else {
-                this.setPosition(tp.x, tp.y, tp.z);
-            }
+            snapOnDiscontinuity();
+            this.interpolator.refreshPositionAndAngles(trackedPos(), this.getYaw(), this.getPitch());
+            this.interpolator.tick();
             logClientDiag();
         }
         // Carry orientation forward each tick so the render lerp has a baseline.
@@ -276,12 +258,16 @@ public class MetroCarEntity extends Entity {
         this.prevPathPitch = this.getPathPitch();
     }
 
-    // True when the arc jumped too far between ticks to be one step of motion (a terminus reverse or a chunk-reload teleport), so the body should snap rather than slide across the gap.
-    private boolean isDiscontinuity() {
+    // When the arc jumps too far to be one tick of motion (a terminus reverse or a chunk-reload teleport), clear the interpolator and orientation baseline so the car hard-snaps to its new pose instead of sliding across the gap.
+    private void snapOnDiscontinuity() {
         float arc = this.getArcLength();
-        boolean jumped = Math.abs(arc - this.lastClientArc) > ARC_DISCONTINUITY;
+        if (Math.abs(arc - this.lastClientArc) > ARC_DISCONTINUITY) {
+            this.interpolator.clear();
+            this.refreshPositionAndAngles(trackedPos(), this.getYaw(), this.getPitch());
+            this.prevPathYaw = this.getPathYaw();
+            this.prevPathPitch = this.getPathPitch();
+        }
         this.lastClientArc = arc;
-        return jumped;
     }
 
     @Override
