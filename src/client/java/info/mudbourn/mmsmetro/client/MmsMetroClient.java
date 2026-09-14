@@ -60,10 +60,11 @@ public class MmsMetroClient implements ClientModInitializer {
             int cz = car.getBlockPos().getZ() >> 4;
             boolean chunkLoaded = world.getChunkManager().isChunkLoaded(cx, cz);
             long sinceRenderMs = System.currentTimeMillis() - car.lastRenderMs;
+            net.minecraft.util.math.Vec3d tp = car.trackedPosDebug();
             MmsMetro.LOGGER.info(String.format(
-                "[diag-scan] idx %d age %d arc %.3f pos (%.2f,%.2f,%.2f) chunkLoaded %b removed %b sinceRenderMs %d",
+                "[diag-scan] idx %d age %d arc %.3f pos (%.2f,%.2f,%.2f) tracked (%.2f,%.2f,%.2f) chunkLoaded %b removed %b sinceRenderMs %d",
                 car.getCarIndex(), car.clientAge(), car.getArcLength(),
-                car.getX(), car.getY(), car.getZ(), chunkLoaded, car.isRemoved(), sinceRenderMs));
+                car.getX(), car.getY(), car.getZ(), tp.x, tp.y, tp.z, chunkLoaded, car.isRemoved(), sinceRenderMs));
         }
     }
 }

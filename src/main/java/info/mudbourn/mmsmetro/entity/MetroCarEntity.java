@@ -129,6 +129,11 @@ public class MetroCarEntity extends Entity {
         return new Vec3d(this.dataTracker.get(POS_X), this.dataTracker.get(POS_Y), this.dataTracker.get(POS_Z));
     }
 
+    // Exposes the raw synced path position so the scan can tell a frozen tracker (a sync drop) from a tracker that updates while the entity stays put (an interpolator wedge).
+    public Vec3d trackedPosDebug() {
+        return trackedPos();
+    }
+
     // Mirrors the synced consist id onto the client so its cars group even after a reload; the tracked path position is read straight off the tracker each tick in tick(), so it needs no per-field callback.
     @Override
     public void onTrackedDataSet(TrackedData<?> data) {
