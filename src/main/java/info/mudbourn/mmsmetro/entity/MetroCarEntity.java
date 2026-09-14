@@ -83,6 +83,9 @@ public class MetroCarEntity extends Entity {
     // An arc step larger than this between ticks is a rewrite of the path, not motion, so the car hard-snaps to its new pose.
     private static final float ARC_DISCONTINUITY = 8.0f;
 
+    // Squared block distance past which the body is snapped straight to its synced position: far beyond one tick of legitimate interpolation lag, so it only fires when the interpolator has wedged and stranded a car off the rail.
+    private static final double POS_RESYNC_SQ = 16.0;
+
     // Smooths the car's position between the consist's per-tick teleports so the body and its riders advance together over the tracking interval instead of the rider trailing the car.
     private final PositionInterpolator interpolator = new PositionInterpolator(this, 1);
 
@@ -252,11 +255,21 @@ public class MetroCarEntity extends Entity {
             // Re-aim the interpolator at the latest tracked position every tick so the body advances even when only one coordinate changed or a screen (a world map) stalled the client between packets, rather than freezing on a stale target until the next POS_Z update.
             this.interpolator.refreshPositionAndAngles(trackedPos(), this.getYaw(), this.getPitch());
             this.interpolator.tick();
+            resyncIfStranded();
             logClientDiag();
         }
         // Carry orientation forward each tick so the render lerp has a baseline.
         this.prevPathYaw = this.getPathYaw();
         this.prevPathPitch = this.getPathPitch();
+    }
+
+    // Rescues a car whose interpolator has wedged: a fast turn can leave the body frozen off the rail while its synced position keeps advancing, so when it falls too far behind to be one tick of lag, clear the interpolator and snap straight onto the tracked position.
+    private void resyncIfStranded() {
+        Vec3d target = trackedPos();
+        if (this.getEntityPos().squaredDistanceTo(target) > POS_RESYNC_SQ) {
+            this.interpolator.clear();
+            this.refreshPositionAndAngles(target, this.getYaw(), this.getPitch());
+        }
     }
 
     // When the arc jumps too far to be one tick of motion (a terminus reverse or a chunk-reload teleport), clear the interpolator and orientation baseline so the car hard-snaps to its new pose instead of sliding across the gap.
