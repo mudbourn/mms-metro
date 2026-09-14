@@ -140,9 +140,26 @@ public final class RailPath {
             if (ahead == null) {
                 continue;
             }
+            // A T_ bump names the direction a train leaves the terminus on; seed it onto an unlabelled terminus so the readout flips on departure without the stop also carrying the reverse label by hand.
+            if (bump.direction.startsWith("T_") && ahead.terminus() && ahead.direction().isEmpty()) {
+                String returnDir = bump.direction.substring(2);
+                if (!returnDir.isEmpty()) {
+                    int idx = this.stations.indexOf(ahead);
+                    ahead = withDirection(ahead, returnDir);
+                    this.stations.set(idx, ahead);
+                }
+            }
             this.bumps.add(new PathBump(arc, ahead.pos(), ahead.name(), ahead.exitDirection(),
                 ahead.hub(), ahead.transferLine(), ahead.terminus()));
         }
+    }
+
+    // Copies a station with a new direction label, leaving its fixed flag untouched so bump matching and tether keys keep reading the travel heading.
+    private static PathStation withDirection(PathStation station, String direction) {
+        return new PathStation(
+            station.arc(), station.dwellTicks(), station.pos(), station.terminus(),
+            station.name(), station.line(), direction, station.fixedDirection(), station.nextStation(),
+            station.exitDirection(), station.hub(), station.transferLine(), station.lineColor());
     }
 
     // Re-scans every node for markers and rebuilds the lists, so stations placed or removed after the path was built register without respawning the train; geometry and arc positions are unchanged.
