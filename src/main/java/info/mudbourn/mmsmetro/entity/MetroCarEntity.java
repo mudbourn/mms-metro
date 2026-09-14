@@ -134,7 +134,7 @@ public class MetroCarEntity extends Entity {
         return trackedPos();
     }
 
-    // Mirrors the synced consist id onto the client so its cars group even after a reload; the tracked path position is read straight off the tracker each tick in tick(), so it needs no per-field callback.
+    // Applies synced state as it arrives: the consist id for grouping, and the path position straight onto the body so a car keeps moving even when the client has stopped ticking it (a tail car that lagged out of entity-tick range would otherwise freeze off the rail while its tracker still updates).
     @Override
     public void onTrackedDataSet(TrackedData<?> data) {
         super.onTrackedDataSet(data);
@@ -147,6 +147,10 @@ public class MetroCarEntity extends Entity {
                     // Keep the current id if the synced value is corrupt.
                 }
             }
+        } else if (this.getEntityWorld().isClient()
+            && (POS_X.equals(data) || POS_Y.equals(data) || POS_Z.equals(data))) {
+            Vec3d tp = trackedPos();
+            this.setPosition(tp.x, tp.y, tp.z);
         }
     }
 
