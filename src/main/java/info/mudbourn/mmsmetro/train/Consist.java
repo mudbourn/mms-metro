@@ -116,28 +116,31 @@ public final class Consist {
         adoptIdentityFromNextStation();
     }
 
-    // Seeds line/colour from the next station ahead so the HUD reads right before the train serves its first stop; direction is derived live by updateDirection.
+    // Seeds line/colour from the next station ahead so the HUD reads right before the train serves its first stop; direction is the travel heading until the first departure adopts a departed stop's label.
     private void adoptIdentityFromNextStation() {
         PathStation next = nextStation();
         if (next != null) {
             this.currentLine = next.line();
             this.currentLineColor = lineColorArgb(next.lineColor());
         }
-        updateDirection();
+        applyTravelHeading();
     }
 
-    // Resolves the direction readout: a fixed-label stop ahead shows its typed label, otherwise the train shows its compass heading of travel, so a terminus turn-around inverts the direction on its own. A terminus withholds its label until the train has actually stopped there, so the whole approach keeps the travel heading and only flips on arrival.
-    private void updateDirection() {
-        PathStation next = nextStation();
-        if (next != null && next.fixedDirection() && !next.direction().isEmpty()
-            && (!next.terminus() || this.phase == Phase.DWELLING)) {
-            this.currentDirection = next.direction();
-            return;
-        }
+    // Sets the readout to the compass heading of travel at the head, the direction shown on any leg not covered by a departed stop's fixed label.
+    private void applyTravelHeading() {
         String heading = this.path.headingName(this.headArc);
         if (!heading.isEmpty()) {
             this.currentDirection = heading;
         }
+    }
+
+    // Fixes the readout for the leg the train is pulling out onto: a fixed-label stop's typed label names the direction leaving it (a terminus's NORTHBOUND return label included), otherwise the travel heading. Adopted at the departure horn so a labelled stop keeps the inbound heading through the whole approach and dwell and only flips on departure.
+    private void applyDepartureDirection(PathStation departed) {
+        if (departed != null && departed.fixedDirection() && !departed.direction().isEmpty()) {
+            this.currentDirection = departed.direction();
+            return;
+        }
+        applyTravelHeading();
     }
 
     // Maps a DyeColor name to an opaque ARGB int for the HUD, defaulting to white for unknown names.
@@ -357,8 +360,6 @@ public final class Consist {
             } else {
                 this.nextStationIndex++;
             }
-            // Fix the direction readout to the heading this leg pulls out on, so it holds through every junction and curve until the next stop rather than flipping with the local track.
-            updateDirection();
             // Pulling out: announce the next stop, its transfer, and the track warning.
             setAnnouncement(buildDepartAnnouncement());
             return;
@@ -379,8 +380,8 @@ public final class Consist {
 
         // Sound the departure horn, then hold DEPART_DELAY_TICKS before the train starts moving.
         playFromLead(ModSounds.DEPARTURE, 1.0f);
-        // The horn is the cue to flip the readout: a terminus takes on its fixed departure label now, which updateDirection withheld through the whole dwell.
-        updateDirection();
+        // The horn is the cue to flip the readout onto the leg the train is about to run: the stop it is leaving names that direction, so a labelled stop (a terminus's return label included) flips only now, after holding the inbound heading through the whole approach and dwell.
+        applyDepartureDirection(nextStation());
         this.departing = true;
         this.departTimer = DEPART_DELAY_TICKS;
     }
