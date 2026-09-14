@@ -1,0 +1,7 @@
+{
+  "parent": "minecraft:block/rail_flat",
+  "textures": {
+    "rail": "mms_metro:block/junction_rail",
+    "particle": "mms_metro:block/junction_rail"
+  }
+}

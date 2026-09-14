@@ -1,6 +1,7 @@
 package info.mudbourn.mmsmetro.client;
 
 import info.mudbourn.mmsmetro.client.compat.EntityCullingCompat;
+import info.mudbourn.mmsmetro.client.render.JunctionRailModels;
 import info.mudbourn.mmsmetro.client.render.MetroCarEntityRenderer;
 import info.mudbourn.mmsmetro.client.screen.BumpEditScreen;
 import info.mudbourn.mmsmetro.client.screen.JunctionEditScreen;
@@ -19,6 +20,7 @@ public class MmsMetroClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         EntityRendererRegistry.register(ModEntities.METRO_CAR, MetroCarEntityRenderer::new);
+        JunctionRailModels.register();
         HudRenderCallback.EVENT.register((context, tickCounter) ->
             MetroHud.render(context, MinecraftClient.getInstance()));
 
