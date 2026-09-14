@@ -93,9 +93,6 @@ public final class Consist {
 
     private int markerRefreshTimer;
 
-    // Counts position ticks so the diagnostic snapshot fires about once a second.
-    private long diagTick;
-
     // The train's live identity for the onboard HUD, set from the last served station (or the first ahead at spawn) until the next arrival changes it.
     private String currentLine = "";
 
@@ -136,7 +133,9 @@ public final class Consist {
 
     // Fixes the readout for the leg the train is pulling out onto: a fixed-label stop's typed label names the direction leaving it (a terminus's NORTHBOUND return label included), otherwise the travel heading. Adopted at the departure horn so a labelled stop keeps the inbound heading through the whole approach and dwell and only flips on departure.
     private void applyDepartureDirection(PathStation departed) {
-        if (departed != null && departed.fixedDirection() && !departed.direction().isEmpty()) {
+        // A terminus leaves on the reverse of its inbound leg, so its own label names the return direction even without the fixed flag; the travel heading here would still read the inbound way.
+        if (departed != null && !departed.direction().isEmpty()
+                && (departed.fixedDirection() || departed.terminus())) {
             this.currentDirection = departed.direction();
             return;
         }
@@ -420,9 +419,6 @@ public final class Consist {
         boolean onRing = this.loop && len > 0.0 && (back == 0.0 || this.ringCommitted);
         BlockPos pathOrigin = this.path.origin();
         Direction pathInitialDir = this.path.initialDir();
-        // Once a second, log the authoritative spacing so a client-side gap can be checked against a server that keeps the cars evenly spaced.
-        boolean logNow = this.diagTick++ % 20 == 0;
-        Vec3d prevCarPos = null;
         for (int i = 0; i < this.cars.size(); i++) {
             double arc = this.headArc - i * this.config.carSpacing;
             if (onRing) {
@@ -449,14 +445,6 @@ public final class Consist {
             for (Entity passenger : car.getPassengerList()) {
                 car.updatePassengerPosition(passenger);
             }
-            if (logNow) {
-                double gap = prevCarPos == null ? 0.0 : point.pos().subtract(prevCarPos).length();
-                info.mudbourn.mmsmetro.MmsMetro.LOGGER.info(String.format(
-                    "[diag-srv] cid %s phase %s speed %.3f head %.3f car %d arc %.3f pos (%.2f,%.2f,%.2f) gapToPrev %.3f riders %d",
-                    car.getConsistId().toString().substring(0, 8), this.phase, this.speed, this.headArc,
-                    i, arc, point.pos().x, point.pos().y, point.pos().z, gap, car.getPassengerList().size()));
-            }
-            prevCarPos = point.pos();
         }
     }
 

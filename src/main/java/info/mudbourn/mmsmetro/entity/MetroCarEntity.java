@@ -129,11 +129,6 @@ public class MetroCarEntity extends Entity {
         return new Vec3d(this.dataTracker.get(POS_X), this.dataTracker.get(POS_Y), this.dataTracker.get(POS_Z));
     }
 
-    // Exposes the raw synced path position so the scan can tell a frozen tracker (a sync drop) from a tracker that updates while the entity stays put (an interpolator wedge).
-    public Vec3d trackedPosDebug() {
-        return trackedPos();
-    }
-
     // Mirrors the synced consist id onto the client so its cars group even after a reload; the tracked path position is read straight off the tracker each tick in tick(), so it needs no per-field callback.
     @Override
     public void onTrackedDataSet(TrackedData<?> data) {
@@ -251,7 +246,6 @@ public class MetroCarEntity extends Entity {
             snapOnDiscontinuity();
             this.interpolator.refreshPositionAndAngles(trackedPos(), this.getYaw(), this.getPitch());
             this.interpolator.tick();
-            logClientDiag();
         }
         // Carry orientation forward each tick so the render lerp has a baseline.
         this.prevPathYaw = this.getPathYaw();
@@ -273,45 +267,6 @@ public class MetroCarEntity extends Entity {
     @Override
     public PositionInterpolator getInterpolator() {
         return this.interpolator;
-    }
-
-    // Logs on the client when a car leaves the world, so a train that renders with too few cars can be traced to the removal reason and tick it happened on.
-    @Override
-    public void remove(Entity.RemovalReason reason) {
-        if (this.getEntityWorld().isClient()) {
-            info.mudbourn.mmsmetro.MmsMetro.LOGGER.info(String.format(
-                "[diag-remove] cid %s idx %d reason %s age %d pos (%.2f,%.2f,%.2f)",
-                shortId(), this.getCarIndex(), reason, this.age,
-                this.getX(), this.getY(), this.getZ()));
-        }
-        super.remove(reason);
-    }
-
-    // Exposes the protected client tick counter so the scan can tell a frozen car (age not advancing) from an unloaded chunk or a real removal.
-    public int clientAge() {
-        return this.age;
-    }
-
-    // Wall-clock millis of the last frame the renderer drew this car, stamped client-side so the scan can flag a car that is present but has stopped being drawn.
-    public long lastRenderMs;
-
-    // First eight characters of the consist id, enough to group a train's cars in the log.
-    private String shortId() {
-        String s = this.consistId.toString();
-        return s.length() >= 8 ? s.substring(0, 8) : s;
-    }
-
-    // Once a second, logs this car's client position and velocity so a rider can report whether the followers stay synced with the lead through the run.
-    private void logClientDiag() {
-        if (this.age % 20 != 0) {
-            return;
-        }
-        Vec3d p = this.getEntityPos();
-        Vec3d v = this.getVelocity();
-        info.mudbourn.mmsmetro.MmsMetro.LOGGER.info(String.format(
-            "[diag-cli] cid %s idx %d arc %.3f pos (%.2f,%.2f,%.2f) vel (%.3f,%.3f,%.3f)",
-            shortId(), this.getCarIndex(), this.getArcLength(),
-            p.x, p.y, p.z, v.x, v.y, v.z));
     }
 
     public java.util.UUID getConsistId() {
