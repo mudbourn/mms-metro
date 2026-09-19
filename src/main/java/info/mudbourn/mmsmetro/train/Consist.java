@@ -14,7 +14,6 @@ import net.minecraft.sound.SoundEvent;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
-import net.minecraft.util.math.Vec3d;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -297,13 +296,10 @@ public final class Consist {
             if (other.isRemoved() || other.getConsistId().equals(myId)) {
                 continue;
             }
-            // Project the other car onto our path: the nearest sampled arc ahead within a car's width of it counts as on our line.
-            for (double a = this.headArc + 0.5; a <= scanEnd; a += 1.0) {
-                Vec3d p = this.path.sample(a).pos();
-                if (p.squaredDistanceTo(other.getX(), other.getY(), other.getZ()) <= 2.25
-                        && a < nearestBlockerArc) {
-                    nearestBlockerArc = a;
-                    break;
+            // A car blocks us only when it sits on one of our own rail blocks ahead, so a train on a parallel track that never joins ours is never a blocker.
+            for (double arc : this.path.arcsOnTrack(other.getBlockPos())) {
+                if (arc > this.headArc + 0.5 && arc <= scanEnd && arc < nearestBlockerArc) {
+                    nearestBlockerArc = arc;
                 }
             }
         }

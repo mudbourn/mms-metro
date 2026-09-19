@@ -174,6 +174,29 @@ public final class RailPath {
         return this.length;
     }
 
+    // Lazily built map from each rail block to the arcs this path passes through it, so an on-track test costs a hash lookup rather than a scan.
+    private java.util.Map<BlockPos, java.util.List<Double>> nodeArcsByPos;
+
+    // Arcs at which this path runs through pos, empty when pos is not one of this path's rail blocks; a one-block vertical tolerance absorbs a car sampled slightly off its rail while keeping a parallel track distinct by its column.
+    public java.util.List<Double> arcsOnTrack(BlockPos pos) {
+        if (this.nodeArcsByPos == null) {
+            java.util.Map<BlockPos, java.util.List<Double>> map = new java.util.HashMap<>();
+            for (int i = 0; i < this.nodes.size() && i < this.cumulative.length; i++) {
+                map.computeIfAbsent(this.nodes.get(i), k -> new java.util.ArrayList<>())
+                    .add(this.cumulative[i]);
+            }
+            this.nodeArcsByPos = map;
+        }
+        java.util.List<Double> out = new java.util.ArrayList<>();
+        for (int dy = -1; dy <= 1; dy++) {
+            java.util.List<Double> arcs = this.nodeArcsByPos.get(pos.add(0, dy, 0));
+            if (arcs != null) {
+                out.addAll(arcs);
+            }
+        }
+        return out;
+    }
+
     // Station stops along this path, ordered from the head of the path.
     public List<PathStation> stations() {
         return this.stations;
