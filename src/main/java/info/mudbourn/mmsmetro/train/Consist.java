@@ -9,6 +9,8 @@ import info.mudbourn.mmsmetro.path.PathPoint;
 import info.mudbourn.mmsmetro.path.PathStation;
 import info.mudbourn.mmsmetro.path.RailPath;
 import info.mudbourn.mmsmetro.registry.ModSounds;
+import net.minecraft.block.Block;
+import net.minecraft.block.BlockState;
 import net.minecraft.entity.Entity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.sound.SoundCategory;
@@ -20,7 +22,9 @@ import net.minecraft.util.math.Vec3d;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 // An ordered train of cars sharing one path: the lead advances by arc-length, stops and dwells at each station, followers trail at a fixed spacing.
 public final class Consist {
@@ -740,20 +744,27 @@ public final class Consist {
         }
     }
 
-    // Range, in blocks, a speaker's jingle carries; a player past this never receives it.
-    private static final double SPEAKER_RANGE = 24.0;
+    // Range, in blocks, a speaker's jingle carries, both straight-line and along the open path it spreads through.
+    private static final int SPEAKER_RANGE = 24;
 
-    // Sends a speaker jingle only to players with a clear line of sight to it, so the sound never bleeds through the walls or floors of an enclosed platform.
+    // Sends a speaker jingle only to players whose head the sound reaches through open blocks, so it never bleeds through the walls or floors of an enclosed platform.
     private void playFromSpeaker(ServerWorld world, BlockPos speaker, SoundEvent sound) {
         Vec3d source = Vec3d.ofCenter(speaker);
+        List<net.minecraft.server.network.ServerPlayerEntity> listeners = new ArrayList<>();
+        for (net.minecraft.server.network.ServerPlayerEntity player : world.getPlayers()) {
+            if (player.squaredDistanceTo(source) <= (double) SPEAKER_RANGE * SPEAKER_RANGE) {
+                listeners.add(player);
+            }
+        }
+        if (listeners.isEmpty()) {
+            return;
+        }
+        Set<BlockPos> heard = speakerReach(world, speaker);
         net.minecraft.registry.entry.RegistryEntry<SoundEvent> entry =
             net.minecraft.registry.entry.RegistryEntry.of(sound);
         long seed = world.getRandom().nextLong();
-        for (net.minecraft.server.network.ServerPlayerEntity player : world.getPlayers()) {
-            if (player.squaredDistanceTo(source) > SPEAKER_RANGE * SPEAKER_RANGE) {
-                continue;
-            }
-            if (!speakerReaches(world, source, player)) {
+        for (net.minecraft.server.network.ServerPlayerEntity player : listeners) {
+            if (!heard.contains(BlockPos.ofFloored(player.getEyePos()))) {
                 continue;
             }
             player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.PlaySoundS2CPacket(
@@ -761,13 +772,28 @@ public final class Consist {
         }
     }
 
-    // True when nothing solid stands between the speaker and the player, so an enclosed platform muffles the jingle for anyone on the far side of a wall.
-    private static boolean speakerReaches(ServerWorld world, Vec3d source, net.minecraft.server.network.ServerPlayerEntity player) {
-        net.minecraft.util.hit.BlockHitResult hit = world.raycast(new net.minecraft.world.RaycastContext(
-            source, player.getEyePos(),
-            net.minecraft.world.RaycastContext.ShapeType.COLLIDER,
-            net.minecraft.world.RaycastContext.FluidHandling.NONE, player));
-        return hit.getType() == net.minecraft.util.hit.HitResult.Type.MISS;
+    // Every block the speaker's sound spreads into by stepping through blocks that are not full solid cubes, so rails, slabs and railings pass it while walls and floors stop it.
+    private static Set<BlockPos> speakerReach(ServerWorld world, BlockPos speaker) {
+        Set<BlockPos> seen = new HashSet<>();
+        seen.add(speaker);
+        List<BlockPos> frontier = List.of(speaker);
+        for (int step = 0; step < SPEAKER_RANGE && !frontier.isEmpty(); step++) {
+            List<BlockPos> next = new ArrayList<>();
+            for (BlockPos pos : frontier) {
+                for (Direction dir : Direction.values()) {
+                    BlockPos neighbor = pos.offset(dir);
+                    if (!world.isPosLoaded(neighbor) || !seen.add(neighbor)) {
+                        continue;
+                    }
+                    BlockState state = world.getBlockState(neighbor);
+                    if (!Block.isShapeFullCube(state.getCollisionShape(world, neighbor))) {
+                        next.add(neighbor);
+                    }
+                }
+            }
+            frontier = next;
+        }
+        return seen;
     }
 
     // Nearest speaker block to a station, or null if none is placed nearby.
