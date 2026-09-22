@@ -39,6 +39,9 @@ public final class RailPath {
 
     private final List<PathBump> bumps = new ArrayList<>();
 
+    // Arc and rail of every node carrying a junction block, in path order, for cross-train yielding at junctions.
+    private final List<PathJunction> junctions = new ArrayList<>();
+
     // True when the walked track returned to its start node: a continuous loop the train circles rather than an out-and-back line, its geometry carrying a closing segment so arc-length spans the whole ring.
     private final boolean loop;
 
@@ -51,7 +54,8 @@ public final class RailPath {
     private final Direction initialDir;
 
     private RailPath(List<Vec3d> points, List<BlockPos> nodes,
-                    List<StationMark> marks, List<BumpMark> bumpMarks, boolean loop, int loopStartIndex,
+                    List<StationMark> marks, List<BumpMark> bumpMarks, List<Integer> junctionIndices,
+                    boolean loop, int loopStartIndex,
                     BlockPos origin, Direction initialDir) {
         this.points = points;
         this.nodes = nodes;
@@ -65,6 +69,11 @@ public final class RailPath {
         this.length = points.size() < 2 ? 0.0 : this.cumulative[points.size() - 1];
         this.loopStartArc = loop && loopStartIndex > 0 && loopStartIndex < this.cumulative.length
             ? this.cumulative[loopStartIndex] : 0.0;
+        for (int index : junctionIndices) {
+            if (index < this.cumulative.length) {
+                this.junctions.add(new PathJunction(this.cumulative[index], nodes.get(index)));
+            }
+        }
         resolveMarks(marks, bumpMarks);
         info.mudbourn.mmsmetro.MmsMetro.LOGGER.debug(
             "[path] loop={} length={} loopStartArc={}", loop, this.length, this.loopStartArc);
@@ -88,6 +97,20 @@ public final class RailPath {
         return this.initialDir;
     }
 
+    // The last rail node the walk reached, the far end of an out-and-back line from its origin.
+    public BlockPos endRail() {
+        return this.nodes.isEmpty() ? this.origin : this.nodes.get(this.nodes.size() - 1);
+    }
+
+    // The rail directions leaving a block, empty when it is not a rail, so a line can be walked from either end without guessing a heading.
+    public static java.util.List<Direction> railExits(World world, BlockPos pos) {
+        RailShape shape = railShape(world, pos);
+        if (shape == null) {
+            return java.util.List.of();
+        }
+        return java.util.List.of(connections(shape));
+    }
+
     // Arc the head returns to after crossing the seam; the ring is the span from here to length().
     public double loopStartArc() {
         return this.loopStartArc;
@@ -100,7 +123,7 @@ public final class RailPath {
             if (mark.nodeIndex < this.cumulative.length) {
                 this.stations.add(new PathStation(
                     this.cumulative[mark.nodeIndex], mark.dwellTicks, mark.pos, mark.terminus,
-                    mark.name, mark.line, mark.direction, mark.fixedDirection, mark.nextStation,
+                    mark.name, mark.line, mark.direction, mark.nextStation,
                     mark.exitDirection, mark.hub, mark.transferLine, mark.lineColor));
             }
         }
@@ -154,11 +177,11 @@ public final class RailPath {
         }
     }
 
-    // Copies a station with a new direction label, leaving its fixed flag untouched so bump matching and tether keys keep reading the travel heading.
+    // Copies a station with a new direction label.
     private static PathStation withDirection(PathStation station, String direction) {
         return new PathStation(
             station.arc(), station.dwellTicks(), station.pos(), station.terminus(),
-            station.name(), station.line(), direction, station.fixedDirection(), station.nextStation(),
+            station.name(), station.line(), direction, station.nextStation(),
             station.exitDirection(), station.hub(), station.transferLine(), station.lineColor());
     }
 
@@ -218,9 +241,14 @@ public final class RailPath {
         return this.bumps;
     }
 
+    // Junction nodes along this path, ordered from the head of the path.
+    public List<PathJunction> junctions() {
+        return this.junctions;
+    }
+
     // A station found at a node, before arc-lengths are known.
     private record StationMark(int nodeIndex, int dwellTicks, BlockPos pos, boolean terminus,
-                              String name, String line, String direction, boolean fixedDirection,
+                              String name, String line, String direction,
                               String nextStation, String exitDirection, boolean hub,
                               String transferLine, String lineColor) {
     }
@@ -286,9 +314,9 @@ public final class RailPath {
         return this.points.get(i + 1).subtract(this.points.get(i));
     }
 
-    // The direction a train approaching a stop would display: the stop's fixed label when set, else the track's heading of travel; this is what a directed bump is matched against.
+    // The direction a train approaching a stop would display: the stop's label when set, else the track's heading of travel; this is what a directed bump is matched against.
     private static String stationReadout(PathStation station, String heading) {
-        return station.fixedDirection() && !station.direction().isEmpty()
+        return !station.direction().isEmpty()
             ? station.direction()
             : heading;
     }
@@ -336,15 +364,19 @@ public final class RailPath {
         List<BlockPos> nodes = new ArrayList<>();
         List<StationMark> marks = new ArrayList<>();
         List<BumpMark> bumpMarks = new ArrayList<>();
+        List<Integer> junctionIndices = new ArrayList<>();
         RailShape startShape = railShape(world, start);
         if (startShape == null) {
-            return new RailPath(points, nodes, marks, bumpMarks, false, 0, start.toImmutable(), initialDir);
+            return new RailPath(points, nodes, marks, bumpMarks, junctionIndices, false, 0, start.toImmutable(), initialDir);
         }
 
         info.mudbourn.mmsmetro.MmsMetro.LOGGER.debug(
             "[path] build start {} shape {} initialDir {}", start, startShape, initialDir);
         points.add(centerPoint(start, startShape));
         nodes.add(start.toImmutable());
+        if (hasJunction(world, start)) {
+            junctionIndices.add(0);
+        }
         Direction travel = pickExit(startShape, initialDir);
         // Keyed by node plus the heading the walk leaves it on, not node alone, so a junction crossed twice on different headings is a legitimate crossing rather than a premature loop; the value is the node's first index for closing the ring.
         Map<String, Integer> stateIndex = new HashMap<>();
@@ -388,6 +420,9 @@ public final class RailPath {
 
             points.add(centerPoint(next, nextShape));
             nodes.add(next.toImmutable());
+            if (hasJunction(world, next)) {
+                junctionIndices.add(nodes.size() - 1);
+            }
             stateIndex.put(key, nodes.size() - 1);
 
             current = next;
@@ -404,7 +439,12 @@ public final class RailPath {
             "[path] build end: {} nodes, last {}, reason {}",
             nodes.size(), nodes.isEmpty() ? "none" : nodes.get(nodes.size() - 1), endReason);
         scanMarks(world, nodes, marks, bumpMarks);
-        return new RailPath(points, nodes, marks, bumpMarks, loop, loopStartIndex, start.toImmutable(), initialDir);
+        return new RailPath(points, nodes, marks, bumpMarks, junctionIndices, loop, loopStartIndex, start.toImmutable(), initialDir);
+    }
+
+    // True when a junction block sits under this rail node.
+    private static boolean hasJunction(World world, BlockPos node) {
+        return world.getBlockEntity(node.down()) instanceof JunctionBlockEntity;
     }
 
     // A run of node indices more than this far apart counts as a separate pass of the track past one marker, so a route that visits a block twice (an out-and-back stub, or a junction crossed on two headings) stops there on each pass.
@@ -483,7 +523,6 @@ public final class RailPath {
         String name = "";
         String line = "";
         String direction = "";
-        boolean fixedDirection = false;
         String nextStation = "";
         String exitDirection = "";
         boolean hub = false;
@@ -496,7 +535,6 @@ public final class RailPath {
             name = station.getStationName();
             line = station.getLineName();
             direction = station.getLineDirection();
-            fixedDirection = station.isFixedDirection();
             nextStation = station.getNextStation();
             exitDirection = station.getExitDirection();
             hub = station.isHub();
@@ -504,7 +542,7 @@ public final class RailPath {
             lineColor = station.getLineColor();
         }
         return new StationMark(nodeIndex, dwell, best, terminus,
-            name, line, direction, fixedDirection, nextStation, exitDirection, hub, transferLine, lineColor);
+            name, line, direction, nextStation, exitDirection, hub, transferLine, lineColor);
     }
 
     // How far a station marker may sit from a rail node and still count: one block out horizontally, two below to two above; primary placement is under the rail, but beside or on a platform above also counts, bound to the single nearest node.

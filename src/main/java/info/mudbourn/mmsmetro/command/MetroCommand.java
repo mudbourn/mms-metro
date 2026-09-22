@@ -39,11 +39,22 @@ public final class MetroCommand {
                 .then(CommandManager.argument("cars", IntegerArgumentType.integer(1, 32))
                     .executes(context -> spawn(context.getSource(),
                         IntegerArgumentType.getInteger(context, "cars")))))
+            .then(CommandManager.literal("circulate")
+                .then(CommandManager.argument("line", StringArgumentType.word())
+                    .suggests((ctx, builder) -> suggestLineIds(ctx.getSource(), builder))
+                    .executes(context -> circulate(context.getSource(),
+                        StringArgumentType.getString(context, "line")))))
             .then(CommandManager.literal("remove")
                 .then(CommandManager.literal("all")
                     .executes(context -> removeAll(context.getSource())))
                 .then(CommandManager.literal("nearest")
-                    .executes(context -> removeNearest(context.getSource()))))
+                    .executes(context -> removeNearest(context.getSource())))
+                .then(CommandManager.literal("line")
+                    .then(CommandManager.argument("line", StringArgumentType.word())
+                        .suggests((ctx, builder) -> CommandSource.suggestMatching(
+                            ConsistManager.activeLineIds(ctx.getSource().getWorld()), builder))
+                        .executes(context -> removeLine(context.getSource(),
+                            StringArgumentType.getString(context, "line"))))))
             .then(CommandManager.literal("config")
                 .executes(context -> showConfig(context.getSource()))
                 .then(CommandManager.argument("key", StringArgumentType.word())
@@ -86,12 +97,7 @@ public final class MetroCommand {
                 .then(CommandManager.argument("value", BoolArgumentType.bool())
                     .executes(context -> applyStation(context.getSource(), station ->
                         station.setHub(BoolArgumentType.getBool(context, "value")),
-                        "hub"))))
-            .then(CommandManager.literal("fixeddir")
-                .then(CommandManager.argument("value", BoolArgumentType.bool())
-                    .executes(context -> applyStation(context.getSource(), station ->
-                        station.setFixedDirection(BoolArgumentType.getBool(context, "value")),
-                        "fixeddir"))));
+                        "hub"))));
     }
 
     // A text station field taking the remainder of the command line.
@@ -124,6 +130,31 @@ public final class MetroCommand {
 
         source.sendFeedback(() -> Text.literal("Spawned a " + count + "-car train."), true);
         return 1;
+    }
+
+    // Suggests the line ids that have a loaded station block, so circulate autocompletes to real lines wherever the player stands.
+    private static java.util.concurrent.CompletableFuture<com.mojang.brigadier.suggestion.Suggestions> suggestLineIds(
+            ServerCommandSource source, com.mojang.brigadier.suggestion.SuggestionsBuilder builder) {
+        return CommandSource.suggestMatching(
+            info.mudbourn.mmsmetro.station.StationIndex.lineIds(source.getWorld()), builder);
+    }
+
+    private static int circulate(ServerCommandSource source, String line) {
+        int count = MmsMetro.config().carsPerTrain;
+        int trains = ConsistManager.circulate(source.getWorld(), line, count, MmsMetro.config());
+        if (trains == 0) {
+            source.sendError(Text.literal("No loaded stations found for line '" + line + "'."));
+            return 0;
+        }
+        source.sendFeedback(() -> Text.literal(
+            "Circulating " + line + " with " + trains + " train(s); three more waves follow, alternating terminals."), true);
+        return trains;
+    }
+
+    private static int removeLine(ServerCommandSource source, String line) {
+        int removed = ConsistManager.removeByLine(source.getWorld(), line);
+        source.sendFeedback(() -> Text.literal("Removed " + removed + " train(s) on line " + line + "."), true);
+        return removed;
     }
 
     private static int removeAll(ServerCommandSource source) {
@@ -174,7 +205,6 @@ public final class MetroCommand {
         String info = "Station: name=" + s.getStationName()
             + ", line=" + s.getLineName()
             + ", direction=" + s.getLineDirection()
-            + ", fixeddir=" + s.isFixedDirection()
             + ", next=" + s.getNextStation()
             + ", exit=" + s.getExitDirection()
             + ", dwell=" + s.getDwellTicks()

@@ -19,6 +19,9 @@ public class MetroCarEntityRenderer extends EntityRenderer<MetroCarEntity, Metro
 
     private static final Identifier TEXTURE = Identifier.ofVanilla("textures/entity/minecart.png");
 
+    // Opaque white, the neutral tint that leaves the texture unchanged.
+    private static final int WHITE = 0xFFFFFFFF;
+
     private final MinecartEntityModel model;
 
     public MetroCarEntityRenderer(EntityRendererFactory.Context ctx) {
@@ -44,6 +47,9 @@ public class MetroCarEntityRenderer extends EntityRenderer<MetroCarEntity, Metro
         super.updateRenderState(entity, state, tickDelta);
         state.lerpedYaw = entity.getLerpedPathYaw(tickDelta);
         state.lerpedPitch = entity.getLerpedPathPitch(tickDelta);
+        // Tint the car by its line colour, falling back to an untinted white when none is set.
+        int color = entity.getHudLineColor();
+        state.tintColor = (color >>> 24) == 0 ? WHITE : color;
     }
 
     @Override
@@ -64,6 +70,8 @@ public class MetroCarEntityRenderer extends EntityRenderer<MetroCarEntity, Metro
             this.model.getLayer(TEXTURE),
             state.light,
             OverlayTexture.DEFAULT_UV,
+            state.tintColor,
+            null,
             state.outlineColor,
             null
         );
@@ -72,5 +80,6 @@ public class MetroCarEntityRenderer extends EntityRenderer<MetroCarEntity, Metro
     }
 
     public static class State extends MinecartEntityRenderState {
+        public int tintColor = WHITE;
     }
 }

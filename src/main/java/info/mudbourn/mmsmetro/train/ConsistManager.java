@@ -4,6 +4,7 @@ import info.mudbourn.mmsmetro.MmsMetro;
 import info.mudbourn.mmsmetro.config.MetroConfig;
 import info.mudbourn.mmsmetro.entity.MetroCarEntity;
 import info.mudbourn.mmsmetro.item.MetroSpawnerItem;
+import info.mudbourn.mmsmetro.path.PathStation;
 import info.mudbourn.mmsmetro.path.RailPath;
 import info.mudbourn.mmsmetro.registry.ModEntities;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
@@ -88,19 +89,33 @@ public final class ConsistManager {
             && consist.cars().get(0).getConsistId().equals(consistId));
     }
 
+    // The live consists ticking in a world, so one consist can reason about the others at a shared junction.
+    public static List<Consist> liveConsists(ServerWorld world) {
+        List<Consist> list = BY_WORLD.get(world);
+        return list != null ? list : List.of();
+    }
+
     public static Consist spawn(ServerWorld world, BlockPos rail, Direction facing, int cars, MetroConfig config) {
-        // Head the way the player faces so a directional line departs as set up; only reverse when facing hits an immediate dead end, since the nearest-station guess would otherwise flip the train toward a closer stop behind it and route it wrong through the junction ahead.
-        RailPath forward = RailPath.build(world, rail, facing, RailPath.MAX_NODES);
-        RailPath path = forward;
+        RailPath path = buildLinePath(world, rail, facing);
+        if (path == null) {
+            return null;
+        }
+        double initialHead = Math.min((cars - 1) * config.carSpacing, path.length());
+        return spawnConsistOnPath(world, path, initialHead, cars, config);
+    }
+
+    // Walks the line from a rail, heading the way the player faces so a directional line departs as set up and only reversing when that faces an immediate dead end; null when neither heading yields a path.
+    private static RailPath buildLinePath(ServerWorld world, BlockPos rail, Direction facing) {
+        RailPath path = RailPath.build(world, rail, facing, RailPath.MAX_NODES);
         if (path.length() <= 0.0) {
             path = RailPath.build(world, rail, facing.getOpposite(), RailPath.MAX_NODES);
         }
-        if (path.length() <= 0.0) {
-            return null;
-        }
+        return path.length() > 0.0 ? path : null;
+    }
 
-        double initialHead = Math.min((cars - 1) * config.carSpacing, path.length());
-        Consist consist = new Consist(path, config, initialHead);
+    // Creates a train of cars on a resolved path with its lead at headArc, spawns the entities, and tracks the consist.
+    private static Consist spawnConsistOnPath(ServerWorld world, RailPath path, double headArc, int cars, MetroConfig config) {
+        Consist consist = new Consist(path, config, headArc);
         java.util.UUID consistId = java.util.UUID.randomUUID();
         for (int i = 0; i < cars; i++) {
             MetroCarEntity car = new MetroCarEntity(ModEntities.METRO_CAR, world);
@@ -116,6 +131,276 @@ public final class ConsistManager {
 
         BY_WORLD.computeIfAbsent(world, w -> new ArrayList<>()).add(consist);
         return consist;
+    }
+
+    // Strips a line's display name to its id: every character that is not a Roman letter or digit removed, so "Line 1: Fort Kelvin" becomes "Line1FortKelvin".
+    public static String lineId(String lineName) {
+        return lineName.replaceAll("[^A-Za-z0-9]", "");
+    }
+
+    // Number of interleaved waves a circulate lays down, alternating the terminal they launch from so both directions are served and each direction's wait is halved.
+    private static final int WAVE_COUNT = 4;
+
+    // One wave of the circulation plan: a canonical path to seed from and the stop arcs to drop trains at, plus the arc its own terminal train must reach before the next wave launches.
+    private record Wave(BlockPos origin, Direction dir, List<Double> arcs, double triggerArc) {
+    }
+
+    // A wave still to launch, held until an earlier wave's terminal train reaches its trigger arc so the waves stay staggered.
+    private record PendingWave(ServerWorld world, MetroCarEntity trigger, double triggerArc,
+                               List<Wave> remaining, int cars, MetroConfig config) {
+    }
+
+    private static final List<PendingWave> PENDING_WAVES = new ArrayList<>();
+
+    // Lays out WAVE_COUNT interleaved waves and launches the first, queuing the rest to fire in turn as each preceding wave pulls clear; returns the number of trains in the first wave.
+    public static int circulate(ServerWorld world, String lineId, int cars, MetroConfig config) {
+        List<Wave> plan = planWaves(world, lineId);
+        if (plan.isEmpty()) {
+            return 0;
+        }
+
+        int spawned = spawnWave(world, plan.get(0), cars, config);
+        if (spawned <= 0) {
+            return 0;
+        }
+        queueRemaining(world, firstWaveLead, plan, 0, cars, config);
+        return spawned;
+    }
+
+    // Builds the alternating-terminal wave plan: even waves run inward from the start terminal, odd waves inward from the opposite one, each dropping trains at every other of its own stops.
+    private static List<Wave> planWaves(ServerWorld world, String lineId) {
+        List<BlockPos> stations = info.mudbourn.mmsmetro.station.StationIndex.stationsOnLine(world, lineId);
+        if (stations.isEmpty()) {
+            return List.of();
+        }
+
+        BlockPos[] terminals = terminals(stations);
+        Wave forward = buildWave(world, terminals[0], lineId);
+        if (forward == null) {
+            return List.of();
+        }
+        Wave reverse = buildWave(world, terminals[1], lineId);
+
+        List<Wave> plan = new ArrayList<>();
+        for (int i = 0; i < WAVE_COUNT; i++) {
+            Wave wave = (i % 2 == 1 && reverse != null) ? reverse : forward;
+            plan.add(wave);
+        }
+        return plan;
+    }
+
+    // Resolves the wave launched inward from one terminal: its canonical path, the every-other-stop arcs, and the nearest stop's arc as the trigger for the following wave.
+    private static Wave buildWave(ServerWorld world, BlockPos terminal, String lineId) {
+        BlockPos rail = railNearStation(world, terminal);
+        if (rail == null) {
+            return null;
+        }
+        RailPath path = buildFromTerminal(world, rail);
+        if (path == null) {
+            return null;
+        }
+
+        List<PathStation> stops = new ArrayList<>();
+        java.util.Set<BlockPos> seen = new java.util.HashSet<>();
+        for (PathStation station : path.stations()) {
+            if (lineId(station.line()).equalsIgnoreCase(lineId) && seen.add(station.pos())) {
+                stops.add(station);
+            }
+        }
+        if (stops.isEmpty()) {
+            return null;
+        }
+        double triggerArc = stops.get(stops.size() >= 2 ? 1 : 0).arc();
+        return new Wave(path.origin(), path.initialDir(), everyOtherArc(stops), triggerArc);
+    }
+
+    // Queues the waves after index `from`, each waiting on the terminal train of the wave before it; a null lead or an exhausted plan queues nothing.
+    private static void queueRemaining(ServerWorld world, MetroCarEntity lead, List<Wave> plan,
+                                       int from, int cars, MetroConfig config) {
+        if (lead == null || from + 1 >= plan.size()) {
+            return;
+        }
+        PENDING_WAVES.add(new PendingWave(world, lead, plan.get(from).triggerArc(),
+            new ArrayList<>(plan.subList(from + 1, plan.size())), cars, config));
+    }
+
+    // The two ends of a line: the start terminal (southernmost on a north-south line, westernmost on an east-west one, by whichever axis the stops span more) and the opposite terminal.
+    private static BlockPos[] terminals(List<BlockPos> stations) {
+        int minX = Integer.MAX_VALUE;
+        int maxX = Integer.MIN_VALUE;
+        int minZ = Integer.MAX_VALUE;
+        int maxZ = Integer.MIN_VALUE;
+        for (BlockPos pos : stations) {
+            minX = Math.min(minX, pos.getX());
+            maxX = Math.max(maxX, pos.getX());
+            minZ = Math.min(minZ, pos.getZ());
+            maxZ = Math.max(maxZ, pos.getZ());
+        }
+        boolean northSouth = (maxZ - minZ) >= (maxX - minX);
+        BlockPos start = stations.get(0);
+        BlockPos opposite = stations.get(0);
+        for (BlockPos pos : stations) {
+            if (northSouth ? pos.getZ() > start.getZ() : pos.getX() < start.getX()) {
+                start = pos;
+            }
+            if (northSouth ? pos.getZ() < opposite.getZ() : pos.getX() > opposite.getX()) {
+                opposite = pos;
+            }
+        }
+        return new BlockPos[]{start, opposite};
+    }
+
+    // The rail serving a station block, searched in the small neighborhood the path walker binds stations within.
+    private static BlockPos railNearStation(ServerWorld world, BlockPos station) {
+        for (int dy = 0; dy >= -2; dy--) {
+            BlockPos rail = scanRailLayer(world, station, dy);
+            if (rail != null) {
+                return rail;
+            }
+        }
+        for (int dy = 1; dy <= 2; dy++) {
+            BlockPos rail = scanRailLayer(world, station, dy);
+            if (rail != null) {
+                return rail;
+            }
+        }
+        return null;
+    }
+
+    private static BlockPos scanRailLayer(ServerWorld world, BlockPos station, int dy) {
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                BlockPos candidate = station.add(dx, dy, dz);
+                if (AbstractRailBlock.isRail(world, candidate)) {
+                    return candidate;
+                }
+            }
+        }
+        return null;
+    }
+
+    // Walks the whole line from a terminal rail: the longer of the paths its two rail exits open, so the walk heads into the line rather than off its dead end.
+    private static RailPath buildFromTerminal(ServerWorld world, BlockPos terminalRail) {
+        RailPath best = null;
+        for (Direction exit : RailPath.railExits(world, terminalRail)) {
+            RailPath path = RailPath.build(world, terminalRail, exit, RailPath.MAX_NODES);
+            if (best == null || path.length() > best.length()) {
+                best = path;
+            }
+        }
+        return best != null && best.length() > 0.0 ? best : null;
+    }
+
+    // True when a metro car already sits within a car spacing of any point a new train would occupy along the path, so a wave never spawns on top of a standing train.
+    private static boolean arcOccupied(ServerWorld world, RailPath path, double headArc, int cars, MetroConfig config) {
+        double clearance = config.carSpacing;
+        for (int i = 0; i < cars; i++) {
+            double arc = Math.max(0.0, headArc - i * config.carSpacing);
+            Vec3d p = path.sample(arc).pos();
+            net.minecraft.util.math.Box box = new net.minecraft.util.math.Box(
+                p.x - clearance, p.y - clearance, p.z - clearance,
+                p.x + clearance, p.y + clearance, p.z + clearance);
+            if (!world.getEntitiesByType(ModEntities.METRO_CAR, box, car -> !car.isRemoved()).isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Arc positions of every other stop from the start terminal, the stations a single wave fills.
+    private static List<Double> everyOtherArc(List<PathStation> stops) {
+        List<Double> arcs = new ArrayList<>();
+        for (int i = 0; i < stops.size(); i += 2) {
+            arcs.add(stops.get(i).arc());
+        }
+        return arcs;
+    }
+
+    // Lead car of the terminal train (the one seeded at the first stop) of the wave just spawned, so the following wave can wait on it; null when no such train was placed.
+    private static MetroCarEntity firstWaveLead;
+
+    // Spawns a train at each of the wave's stop arcs on a fresh copy of its canonical path, remembering the terminal train's lead for staggering the next wave.
+    private static int spawnWave(ServerWorld world, Wave wave, int cars, MetroConfig config) {
+        firstWaveLead = null;
+        int spawned = 0;
+        for (int i = 0; i < wave.arcs().size(); i++) {
+            RailPath path = RailPath.build(world, wave.origin(), wave.dir(), RailPath.MAX_NODES);
+            if (path.length() <= 0.0) {
+                continue;
+            }
+            double headArc = Math.min(wave.arcs().get(i), path.length());
+            // A single-track terminal (Spanish-solution) holds one train, so never drop a train onto a stop another already occupies.
+            if (arcOccupied(world, path, headArc, cars, config)) {
+                continue;
+            }
+            Consist consist = spawnConsistOnPath(world, path, headArc, cars, config);
+            if (consist != null) {
+                spawned++;
+                if (i == 0 && !consist.cars().isEmpty()) {
+                    firstWaveLead = consist.cars().get(0);
+                }
+            }
+        }
+        return spawned;
+    }
+
+    // Fires any queued wave whose preceding wave's terminal train has reached its trigger arc, chaining the wave after it, and drops queues whose trigger train is gone.
+    private static void tickPendingWaves(ServerWorld world) {
+        List<PendingWave> chained = new ArrayList<>();
+        Iterator<PendingWave> it = PENDING_WAVES.iterator();
+        while (it.hasNext()) {
+            PendingWave pending = it.next();
+            if (pending.world != world) {
+                continue;
+            }
+            if (pending.trigger.isRemoved()) {
+                it.remove();
+                continue;
+            }
+            if (pending.trigger.getArcLength() + 1.0e-3 >= pending.triggerArc) {
+                spawnWave(world, pending.remaining.get(0), pending.cars, pending.config);
+                if (firstWaveLead != null && pending.remaining.size() > 1) {
+                    chained.add(new PendingWave(world, firstWaveLead, pending.remaining.get(0).triggerArc(),
+                        new ArrayList<>(pending.remaining.subList(1, pending.remaining.size())),
+                        pending.cars, pending.config));
+                }
+                it.remove();
+            }
+        }
+        PENDING_WAVES.addAll(chained);
+    }
+
+    // Discards every live train serving the line, returning how many trains were removed.
+    public static int removeByLine(ServerWorld world, String lineId) {
+        List<Consist> list = BY_WORLD.get(world);
+        if (list == null) {
+            return 0;
+        }
+        List<java.util.UUID> ids = new ArrayList<>();
+        for (Consist consist : list) {
+            if (!consist.cars().isEmpty() && lineId(consist.lineName()).equalsIgnoreCase(lineId)) {
+                ids.add(consist.cars().get(0).getConsistId());
+            }
+        }
+        for (java.util.UUID id : ids) {
+            removeConsist(world, id);
+        }
+        return ids.size();
+    }
+
+    // Line ids of the trains currently running, for the remove command's autocomplete.
+    public static java.util.Set<String> activeLineIds(ServerWorld world) {
+        java.util.Set<String> ids = new java.util.LinkedHashSet<>();
+        List<Consist> list = BY_WORLD.get(world);
+        if (list != null) {
+            for (Consist consist : list) {
+                String id = lineId(consist.lineName());
+                if (!id.isEmpty()) {
+                    ids.add(id);
+                }
+            }
+        }
+        return ids;
     }
 
     public static BlockPos findRail(World world, BlockPos base) {
@@ -165,6 +450,8 @@ public final class ConsistManager {
             reconcile(world);
         }
         RECONCILE_TIMERS.put(world, timer);
+
+        tickPendingWaves(world);
 
         List<Consist> list = BY_WORLD.get(world);
         if (list != null) {

@@ -1,8 +1,10 @@
 package info.mudbourn.mmsmetro.train;
 
 import info.mudbourn.mmsmetro.block.SpeakerBlock;
+import info.mudbourn.mmsmetro.block.StationBlock;
 import info.mudbourn.mmsmetro.config.MetroConfig;
 import info.mudbourn.mmsmetro.entity.MetroCarEntity;
+import info.mudbourn.mmsmetro.path.PathJunction;
 import info.mudbourn.mmsmetro.path.PathPoint;
 import info.mudbourn.mmsmetro.path.PathStation;
 import info.mudbourn.mmsmetro.path.RailPath;
@@ -14,6 +16,7 @@ import net.minecraft.sound.SoundEvent;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.Vec3d;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -26,6 +29,15 @@ public final class Consist {
 
     // Radius, in blocks, to search around a station for a speaker block.
     private static final int SPEAKER_SEARCH_RADIUS = 5;
+
+    // How far ahead, in blocks, a train watches for a junction it may have to yield at.
+    private static final double JUNCTION_SCAN = 48.0;
+
+    // Distance, in blocks, a yielding train stops short of the junction node so its front car never sits on the crossing.
+    private static final double JUNCTION_YIELD_GAP = 2.0;
+
+    // Radius, in blocks, to search around a junction for the station block whose platform decides priority.
+    private static final int JUNCTION_STATION_RADIUS = 16;
 
     private final List<MetroCarEntity> cars = new ArrayList<>();
 
@@ -62,11 +74,14 @@ public final class Consist {
     // Set once a bump for the upcoming station is crossed, so the train eases down from the bump to a smooth halt at the platform.
     private boolean approachBraking;
 
+    // Arc where the ease-down was armed, the point the bump updated the train, so the brake curve is anchored there rather than to the gap between stations.
+    private double easeStartArc;
+
+    // Speed the train was travelling when the ease-down was armed, the top of the anchored brake curve.
+    private double easeStartSpeed;
+
     // True after the head has crossed the ring seam at least once, so followers only wrap around the ring once the whole train has committed to it (never while the lead-in spur is still being ridden).
     private boolean ringCommitted;
-
-    // Fraction of full braking used for the bump-armed ease-down, gentler than the safety brake so the glide into a platform is smooth.
-    private static final double EASE_BRAKE_FRACTION = 0.35;
 
     // Ticks the train holds after sounding its departure horn before it actually pulls out (3 seconds).
     private static final int DEPART_DELAY_TICKS = 60;
@@ -135,11 +150,9 @@ public final class Consist {
         }
     }
 
-    // Fixes the readout for the leg the train is pulling out onto: a fixed-label stop's typed label names the direction leaving it (a terminus's NORTHBOUND return label included), otherwise the travel heading. Adopted at the departure horn so a labelled stop keeps the inbound heading through the whole approach and dwell and only flips on departure.
+    // Fixes the readout for the leg the train is pulling out onto: a labelled stop's typed label names the direction leaving it (a terminus's return label included), otherwise the travel heading. Adopted at the departure horn so a labelled stop keeps the inbound heading through the whole approach and dwell and only flips on departure.
     private void applyDepartureDirection(PathStation departed) {
-        // A terminus leaves on the reverse of its inbound leg, so its own label names the return direction even without the fixed flag; the travel heading here would still read the inbound way.
-        if (departed != null && !departed.direction().isEmpty()
-                && (departed.fixedDirection() || departed.terminus())) {
+        if (departed != null && !departed.direction().isEmpty()) {
             this.currentDirection = departed.direction();
             return;
         }
@@ -158,6 +171,32 @@ public final class Consist {
 
     public List<MetroCarEntity> cars() {
         return this.cars;
+    }
+
+    RailPath path() {
+        return this.path;
+    }
+
+    // The line the train currently serves, for removing or listing trains by line.
+    public String lineName() {
+        return this.currentLine;
+    }
+
+    double headArc() {
+        return this.headArc;
+    }
+
+    MetroCarEntity lead() {
+        return this.cars.isEmpty() ? null : this.cars.get(0);
+    }
+
+    boolean isDwelling() {
+        return this.phase == Phase.DWELLING;
+    }
+
+    // Length of the whole train along the track, so a junction is only clear once the tail is through it.
+    private double trainLength() {
+        return this.cars.size() * this.config.carSpacing;
     }
 
     public void placeCars() {
@@ -216,19 +255,23 @@ public final class Consist {
 
         // A train ahead on our own path is a hard stop we hold behind, not a station; the nearer constraint decides where we brake.
         double blockerArc = blockingTrainHoldArc();
-        boolean blockedByTrain = blockerArc < stationArc;
-        double targetArc = Math.min(stationArc, blockerArc);
+        // A junction a higher-priority train is crossing is a hard stop we hold short of until it clears.
+        double junctionArc = junctionYieldArc();
+        double targetArc = Math.min(stationArc, Math.min(blockerArc, junctionArc));
+        boolean blockedByTrain = blockerArc <= junctionArc && blockerArc < stationArc;
+        boolean yieldingJunction = !blockedByTrain && junctionArc < stationArc;
         double remaining = targetArc - this.headArc;
 
         // Hard stopping distance is the safety floor; a crossed bump starts an earlier, gentler ease-down to the platform.
         double brakingDistance = (this.speed * this.speed) / (2.0 * this.config.acceleration);
-        boolean easeToStation = this.approachBraking && !blockedByTrain && target != null;
+        boolean easeToStation = this.approachBraking && !blockedByTrain && !yieldingJunction && target != null;
         if (remaining <= brakingDistance) {
             this.speed = Math.max(0.0, this.speed - this.config.acceleration);
         } else if (easeToStation) {
-            // Clamp to the speed that still stops at the platform under a gentle brake, so an early-armed ease-down glides in on a profile instead of collapsing into an asymptotic crawl.
-            double stopDist = Math.max(1.0e-3, stationArc - this.headArc);
-            double allowed = Math.sqrt(2.0 * this.config.acceleration * EASE_BRAKE_FRACTION * stopDist);
+            // Constant-deceleration curve anchored at the bump: it holds the arming speed as the head leaves the bump and reaches zero exactly at the platform, so braking begins where the bump updated the train rather than late by the station gap.
+            double span = Math.max(1.0e-3, stationArc - this.easeStartArc);
+            double stopDist = Math.max(0.0, stationArc - this.headArc);
+            double allowed = this.easeStartSpeed * Math.sqrt(stopDist / span);
             this.speed = Math.min(this.speed + this.config.acceleration, Math.min(this.config.maxSpeed, allowed));
         } else {
             this.speed = Math.min(this.config.maxSpeed, this.speed + this.config.acceleration);
@@ -238,7 +281,7 @@ public final class Consist {
         fireCrossedBumps();
 
         // Crossing the loop seam is not a stop: fold the arc back to the ring start and resume the station cycle without braking.
-        if (wrap && !blockedByTrain && len > 0.0 && this.headArc >= len) {
+        if (wrap && !blockedByTrain && !yieldingJunction && len > 0.0 && this.headArc >= len) {
             double back = this.path.loopStartArc();
             this.headArc = back + (this.headArc - len);
             this.ringCommitted = true;
@@ -262,6 +305,9 @@ public final class Consist {
                     playFromLead(ModSounds.BUFFER_WAIT, 0.8f);
                 }
                 this.bufferHold = BUFFER_HOLD_TICKS;
+            } else if (yieldingJunction) {
+                // Held short of a junction a higher-priority train is crossing: idle and re-check each tick, releasing the instant it clears.
+                this.bufferWaitTimer = 0;
             } else if (target != null) {
                 arriveAt(target);
             } else {
@@ -310,6 +356,91 @@ public final class Consist {
         // Hold a full headway behind the blocker, never closer than one car spacing.
         double gap = Math.max(this.config.headway, this.config.carSpacing);
         return Math.max(this.headArc, nearestBlockerArc - gap);
+    }
+
+    // Arc we must not pass because a higher-priority train is crossing a junction ahead of us, or +infinity when no junction ahead is contested.
+    private double junctionYieldArc() {
+        ServerWorld world = leadWorld();
+        if (world == null || this.cars.isEmpty()) {
+            return Double.POSITIVE_INFINITY;
+        }
+        List<Consist> siblings = ConsistManager.liveConsists(world);
+        double hold = Double.POSITIVE_INFINITY;
+        for (PathJunction junction : this.path.junctions()) {
+            double myArc = junction.arc();
+            if (myArc <= this.headArc + 0.5 || myArc - this.headArc > JUNCTION_SCAN) {
+                continue;
+            }
+            if (junctionContested(world, siblings, junction)) {
+                hold = Math.min(hold, Math.max(this.headArc, myArc - JUNCTION_YIELD_GAP));
+            }
+        }
+        return hold;
+    }
+
+    // True when a sibling train we must yield to is approaching or occupying this same junction from a different heading.
+    private boolean junctionContested(ServerWorld world, List<Consist> siblings, PathJunction junction) {
+        String myHeading = this.path.headingName(junction.arc());
+        for (Consist other : siblings) {
+            if (other == this || other.cars().isEmpty()) {
+                continue;
+            }
+            for (double otherArc : other.path().arcsOnTrack(junction.rail())) {
+                double otherHead = other.headArc();
+                // The other train contends only while the junction lies from just behind its tail to within the scan window ahead.
+                if (otherArc <= otherHead - other.trainLength() - 0.5 || otherArc - otherHead > JUNCTION_SCAN) {
+                    continue;
+                }
+                // Same heading through the node is a follow, not a crossing; car spacing already handles it.
+                if (myHeading.equals(other.path().headingName(otherArc))) {
+                    continue;
+                }
+                if (!hasJunctionPriority(world, other, junction.rail())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // True when we outrank the other train at a junction: a train stopped at its platform clears first, otherwise the train nearer the junction's station block goes, ties broken by consist id.
+    private boolean hasJunctionPriority(ServerWorld world, Consist other, BlockPos junctionRail) {
+        if (this.isDwelling() != other.isDwelling()) {
+            return this.isDwelling();
+        }
+        MetroCarEntity myLead = lead();
+        MetroCarEntity otherLead = other.lead();
+        if (myLead == null || otherLead == null) {
+            return true;
+        }
+        BlockPos station = nearestStationBlock(world, junctionRail);
+        Vec3d target = station != null
+            ? Vec3d.ofCenter(station)
+            : Vec3d.ofCenter(junctionRail);
+        double myDist = myLead.squaredDistanceTo(target);
+        double otherDist = otherLead.squaredDistanceTo(target);
+        if (Math.abs(myDist - otherDist) < 1.0e-3) {
+            return myLead.getConsistId().compareTo(otherLead.getConsistId()) < 0;
+        }
+        return myDist < otherDist;
+    }
+
+    // Nearest station block to a junction, whose platform is the point priority is measured against, or null when none sits close by.
+    private BlockPos nearestStationBlock(ServerWorld world, BlockPos junctionRail) {
+        BlockPos best = null;
+        double bestSq = Double.MAX_VALUE;
+        int r = JUNCTION_STATION_RADIUS;
+        for (BlockPos pos : BlockPos.iterate(junctionRail.add(-r, -r, -r), junctionRail.add(r, r, r))) {
+            if (!(world.getBlockState(pos).getBlock() instanceof StationBlock)) {
+                continue;
+            }
+            double sq = pos.getSquaredDistance(junctionRail);
+            if (sq < bestSq) {
+                bestSq = sq;
+                best = pos.toImmutable();
+            }
+        }
+        return best;
     }
 
     private void arriveAt(PathStation station) {
@@ -474,21 +605,25 @@ public final class Consist {
             }
             setAnnouncement(buildAnnouncement(bump));
             playIncomingAtStation(bump.stationPos());
-            // Crossing the bump arms the ease-down for the station it heralds.
+            // Crossing the bump arms the ease-down and anchors its curve at this point, unless one is already running toward a nearer stop.
+            if (!this.approachBraking) {
+                this.easeStartArc = this.headArc;
+                this.easeStartSpeed = Math.max(this.speed, this.config.acceleration);
+            }
             this.approachBraking = true;
         }
     }
 
-    // Plays the "train incoming" cue at the station's speaker (or the station block if none is nearby), so it sounds from the platform ahead rather than the moving train.
+    // Plays the "train incoming" cue from the station's speaker, or not at all when the platform has none.
     private void playIncomingAtStation(BlockPos station) {
         ServerWorld world = leadWorld();
         if (world == null || station == null) {
             return;
         }
         BlockPos speaker = findSpeaker(world, station);
-        BlockPos source = speaker != null ? speaker : station;
-        world.playSound(null, source.getX() + 0.5, source.getY() + 0.5, source.getZ() + 0.5,
-            ModSounds.TRAIN_INCOMING, SoundCategory.NEUTRAL, 1.0f, 1.0f);
+        if (speaker != null) {
+            playFromSpeaker(world, speaker, ModSounds.TRAIN_INCOMING);
+        }
     }
 
     // The approaching cue a bump announces, in future tense, showing where the exits will be. The stop name is carried by the grey HUD line.
@@ -600,9 +735,39 @@ public final class Consist {
         }
 
         BlockPos speaker = findSpeaker(world, station.pos());
-        BlockPos source = speaker != null ? speaker : station.pos();
-        world.playSound(null, source.getX() + 0.5, source.getY() + 0.5, source.getZ() + 0.5,
-            ModSounds.ARRIVAL, SoundCategory.NEUTRAL, 1.0f, 1.0f);
+        if (speaker != null) {
+            playFromSpeaker(world, speaker, ModSounds.ARRIVAL);
+        }
+    }
+
+    // Range, in blocks, a speaker's jingle carries; a player past this never receives it.
+    private static final double SPEAKER_RANGE = 24.0;
+
+    // Sends a speaker jingle only to players with a clear line of sight to it, so the sound never bleeds through the walls or floors of an enclosed platform.
+    private void playFromSpeaker(ServerWorld world, BlockPos speaker, SoundEvent sound) {
+        Vec3d source = Vec3d.ofCenter(speaker);
+        net.minecraft.registry.entry.RegistryEntry<SoundEvent> entry =
+            net.minecraft.registry.entry.RegistryEntry.of(sound);
+        long seed = world.getRandom().nextLong();
+        for (net.minecraft.server.network.ServerPlayerEntity player : world.getPlayers()) {
+            if (player.squaredDistanceTo(source) > SPEAKER_RANGE * SPEAKER_RANGE) {
+                continue;
+            }
+            if (!speakerReaches(world, source, player)) {
+                continue;
+            }
+            player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.PlaySoundS2CPacket(
+                entry, SoundCategory.NEUTRAL, source.x, source.y, source.z, 1.0f, 1.0f, seed));
+        }
+    }
+
+    // True when nothing solid stands between the speaker and the player, so an enclosed platform muffles the jingle for anyone on the far side of a wall.
+    private static boolean speakerReaches(ServerWorld world, Vec3d source, net.minecraft.server.network.ServerPlayerEntity player) {
+        net.minecraft.util.hit.BlockHitResult hit = world.raycast(new net.minecraft.world.RaycastContext(
+            source, player.getEyePos(),
+            net.minecraft.world.RaycastContext.ShapeType.COLLIDER,
+            net.minecraft.world.RaycastContext.FluidHandling.NONE, player));
+        return hit.getType() == net.minecraft.util.hit.HitResult.Type.MISS;
     }
 
     // Nearest speaker block to a station, or null if none is placed nearby.
