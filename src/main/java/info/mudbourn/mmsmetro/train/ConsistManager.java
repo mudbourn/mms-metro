@@ -7,12 +7,15 @@ import info.mudbourn.mmsmetro.item.MetroSpawnerItem;
 import info.mudbourn.mmsmetro.path.PathStation;
 import info.mudbourn.mmsmetro.path.RailPath;
 import info.mudbourn.mmsmetro.registry.ModEntities;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongSet;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
 import net.minecraft.block.AbstractRailBlock;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
@@ -33,8 +36,16 @@ public final class ConsistManager {
 
     private static final Map<ServerWorld, Integer> RECONCILE_TIMERS = new HashMap<>();
 
-    // Chunks this mod currently keeps force-loaded per world, keyed by ChunkPos long, so the moving set can be diffed each tick.
-    private static final Map<ServerWorld, java.util.Set<Long>> FORCED_CHUNKS = new HashMap<>();
+    // The force-loaded chunks per world, with the car chunks and radius they were expanded from, so an unchanged train skips the rebuild.
+    private static final Map<ServerWorld, ForcedChunks> FORCED_CHUNKS = new HashMap<>();
+
+    private record ForcedChunks(int radius, LongSet carChunks, LongSet forced) {
+    }
+
+    // Every loaded metro car in the world being ticked, gathered once so each consist's headway check shares one entity scan.
+    private static List<? extends MetroCarEntity> tickCars;
+
+    private static ServerWorld tickCarsWorld;
 
     public static void init() {
         ServerTickEvents.END_WORLD_TICK.register(ConsistManager::tickWorld);
@@ -64,6 +75,11 @@ public final class ConsistManager {
     // Every loaded metro car in the world, whether or not it is still tracked in the in-memory registry (which is empty after a reload).
     private static List<? extends MetroCarEntity> allCars(ServerWorld world) {
         return world.getEntitiesByType(ModEntities.METRO_CAR, car -> true);
+    }
+
+    // The loaded cars of the world, the shared per-tick list while that world ticks its consists, else a fresh scan.
+    static List<? extends MetroCarEntity> carsThisTick(ServerWorld world) {
+        return tickCarsWorld == world && tickCars != null ? tickCars : allCars(world);
     }
 
     // Discards every car sharing a consist id and drops that consist from the live registry, returning the number of cars removed.
@@ -454,60 +470,74 @@ public final class ConsistManager {
         tickPendingWaves(world);
 
         List<Consist> list = BY_WORLD.get(world);
-        if (list != null) {
-            Iterator<Consist> it = list.iterator();
-            while (it.hasNext()) {
-                Consist consist = it.next();
-                if (consist.isFinished()) {
-                    it.remove();
-                } else {
-                    consist.tick();
+        if (list != null && !list.isEmpty()) {
+            tickCars = allCars(world);
+            tickCarsWorld = world;
+            try {
+                Iterator<Consist> it = list.iterator();
+                while (it.hasNext()) {
+                    Consist consist = it.next();
+                    if (consist.isFinished()) {
+                        it.remove();
+                    } else {
+                        consist.tick();
+                    }
                 }
+            } finally {
+                tickCars = null;
+                tickCarsWorld = null;
             }
         }
 
         updateForcedChunks(world, list);
     }
 
-    // Keeps the chunks around every live train force-loaded so a moving consist and the rail ahead never fall into an unloaded chunk, which would strand cars and truncate the walked path; the desired set is rebuilt from car positions each tick and diffed against the currently forced set.
+    // Keeps the chunks around every live train force-loaded so a moving consist and the rail ahead never fall into an unloaded chunk, which would strand cars and truncate the walked path; the desired set is rebuilt only when a car changes chunk and diffed against the currently forced set.
     private static void updateForcedChunks(ServerWorld world, List<Consist> list) {
-        java.util.Set<Long> desired = new java.util.HashSet<>();
-        int radius = MmsMetro.config().chunkRadius;
+        LongSet carChunks = new LongOpenHashSet();
         if (list != null) {
             for (Consist consist : list) {
                 for (MetroCarEntity car : consist.cars()) {
-                    if (car.isRemoved()) {
-                        continue;
-                    }
-                    int cx = car.getBlockPos().getX() >> 4;
-                    int cz = car.getBlockPos().getZ() >> 4;
-                    for (int dx = -radius; dx <= radius; dx++) {
-                        for (int dz = -radius; dz <= radius; dz++) {
-                            desired.add(net.minecraft.util.math.ChunkPos.toLong(cx + dx, cz + dz));
-                        }
+                    if (!car.isRemoved()) {
+                        carChunks.add(ChunkPos.toLong(car.getBlockPos()));
                     }
                 }
             }
         }
 
-        java.util.Set<Long> current = FORCED_CHUNKS.getOrDefault(world, java.util.Set.of());
+        int radius = MmsMetro.config().chunkRadius;
+        ForcedChunks previous = FORCED_CHUNKS.get(world);
+        if (previous == null ? carChunks.isEmpty() : previous.radius() == radius && previous.carChunks().equals(carChunks)) {
+            return;
+        }
+
+        LongSet desired = new LongOpenHashSet();
+        for (long carChunk : carChunks) {
+            int cx = ChunkPos.getPackedX(carChunk);
+            int cz = ChunkPos.getPackedZ(carChunk);
+            for (int dx = -radius; dx <= radius; dx++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    desired.add(ChunkPos.toLong(cx + dx, cz + dz));
+                }
+            }
+        }
+
+        LongSet current = previous != null ? previous.forced() : new LongOpenHashSet();
         for (long key : desired) {
             if (!current.contains(key)) {
-                world.setChunkForced(net.minecraft.util.math.ChunkPos.getPackedX(key),
-                    net.minecraft.util.math.ChunkPos.getPackedZ(key), true);
+                world.setChunkForced(ChunkPos.getPackedX(key), ChunkPos.getPackedZ(key), true);
             }
         }
         for (long key : current) {
             if (!desired.contains(key)) {
-                world.setChunkForced(net.minecraft.util.math.ChunkPos.getPackedX(key),
-                    net.minecraft.util.math.ChunkPos.getPackedZ(key), false);
+                world.setChunkForced(ChunkPos.getPackedX(key), ChunkPos.getPackedZ(key), false);
             }
         }
 
         if (desired.isEmpty()) {
             FORCED_CHUNKS.remove(world);
         } else {
-            FORCED_CHUNKS.put(world, desired);
+            FORCED_CHUNKS.put(world, new ForcedChunks(radius, carChunks, desired));
         }
     }
 

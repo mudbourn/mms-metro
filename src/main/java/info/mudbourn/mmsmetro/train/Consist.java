@@ -1,9 +1,10 @@
 package info.mudbourn.mmsmetro.train;
 
-import info.mudbourn.mmsmetro.block.SpeakerBlock;
-import info.mudbourn.mmsmetro.block.StationBlock;
+import info.mudbourn.mmsmetro.block.entity.SpeakerBlockEntity;
+import info.mudbourn.mmsmetro.block.entity.StationBlockEntity;
 import info.mudbourn.mmsmetro.config.MetroConfig;
 import info.mudbourn.mmsmetro.entity.MetroCarEntity;
+import info.mudbourn.mmsmetro.path.BlockEntityScan;
 import info.mudbourn.mmsmetro.path.PathJunction;
 import info.mudbourn.mmsmetro.path.PathPoint;
 import info.mudbourn.mmsmetro.path.PathStation;
@@ -331,6 +332,9 @@ public final class Consist {
             && this.nextStationIndex >= this.stations.size();
     }
 
+    // Slack, in blocks, added to the blocker scan window for a car sampled off its rail node's center and up to a block above or below it.
+    private static final double BLOCKER_REACH_MARGIN = 4.0;
+
     // Arc we must not pass because a train occupies the track ahead (keeping one car spacing clear), or +infinity when the line is clear within our headway.
     private double blockingTrainHoldArc() {
         ServerWorld world = leadWorld();
@@ -339,11 +343,15 @@ public final class Consist {
         }
         java.util.UUID myId = this.cars.get(0).getConsistId();
         double scanEnd = Math.min(this.path.length(), this.headArc + this.config.headway + this.config.carSpacing + this.config.maxSpeed);
+        double reach = Math.max(0.0, scanEnd - this.headArc) + BLOCKER_REACH_MARGIN;
+        Vec3d head = this.path.sample(this.headArc).pos();
 
         double nearestBlockerArc = Double.POSITIVE_INFINITY;
-        for (MetroCarEntity other : world.getEntitiesByType(
-                info.mudbourn.mmsmetro.registry.ModEntities.METRO_CAR, c -> true)) {
+        for (MetroCarEntity other : ConsistManager.carsThisTick(world)) {
             if (other.isRemoved() || other.getConsistId().equals(myId)) {
+                continue;
+            }
+            if (other.squaredDistanceTo(head) > reach * reach) {
                 continue;
             }
             // A car blocks us only when it sits on one of our own rail blocks ahead, so a train on a parallel track that never joins ours is never a blocker.
@@ -431,20 +439,7 @@ public final class Consist {
 
     // Nearest station block to a junction, whose platform is the point priority is measured against, or null when none sits close by.
     private BlockPos nearestStationBlock(ServerWorld world, BlockPos junctionRail) {
-        BlockPos best = null;
-        double bestSq = Double.MAX_VALUE;
-        int r = JUNCTION_STATION_RADIUS;
-        for (BlockPos pos : BlockPos.iterate(junctionRail.add(-r, -r, -r), junctionRail.add(r, r, r))) {
-            if (!(world.getBlockState(pos).getBlock() instanceof StationBlock)) {
-                continue;
-            }
-            double sq = pos.getSquaredDistance(junctionRail);
-            if (sq < bestSq) {
-                bestSq = sq;
-                best = pos.toImmutable();
-            }
-        }
-        return best;
+        return BlockEntityScan.nearest(world, junctionRail, JUNCTION_STATION_RADIUS, StationBlockEntity.class);
     }
 
     private void arriveAt(PathStation station) {
@@ -759,7 +754,11 @@ public final class Consist {
         if (listeners.isEmpty()) {
             return;
         }
-        Set<BlockPos> heard = speakerReach(world, speaker);
+        Set<BlockPos> ears = new HashSet<>();
+        for (net.minecraft.server.network.ServerPlayerEntity player : listeners) {
+            ears.add(BlockPos.ofFloored(player.getEyePos()));
+        }
+        Set<BlockPos> heard = speakerReach(world, speaker, ears);
         net.minecraft.registry.entry.RegistryEntry<SoundEvent> entry =
             net.minecraft.registry.entry.RegistryEntry.of(sound);
         long seed = world.getRandom().nextLong();
@@ -772,18 +771,25 @@ public final class Consist {
         }
     }
 
-    // Every block the speaker's sound spreads into by stepping through blocks that are not full solid cubes, so rails, slabs and railings pass it while walls and floors stop it.
-    private static Set<BlockPos> speakerReach(ServerWorld world, BlockPos speaker) {
+    // The ears among the given blocks that the speaker's sound spreads into by stepping through blocks that are not full solid cubes, so rails, slabs and railings pass it while walls and floors stop it; the spread stops once every ear is reached.
+    private static Set<BlockPos> speakerReach(ServerWorld world, BlockPos speaker, Set<BlockPos> ears) {
         Set<BlockPos> seen = new HashSet<>();
         seen.add(speaker);
+        Set<BlockPos> reached = new HashSet<>();
+        if (ears.contains(speaker)) {
+            reached.add(speaker);
+        }
         List<BlockPos> frontier = List.of(speaker);
-        for (int step = 0; step < SPEAKER_RANGE && !frontier.isEmpty(); step++) {
+        for (int step = 0; step < SPEAKER_RANGE && !frontier.isEmpty() && reached.size() < ears.size(); step++) {
             List<BlockPos> next = new ArrayList<>();
             for (BlockPos pos : frontier) {
                 for (Direction dir : Direction.values()) {
                     BlockPos neighbor = pos.offset(dir);
                     if (!world.isPosLoaded(neighbor) || !seen.add(neighbor)) {
                         continue;
+                    }
+                    if (ears.contains(neighbor)) {
+                        reached.add(neighbor);
                     }
                     BlockState state = world.getBlockState(neighbor);
                     if (!Block.isShapeFullCube(state.getCollisionShape(world, neighbor))) {
@@ -793,25 +799,12 @@ public final class Consist {
             }
             frontier = next;
         }
-        return seen;
+        return reached;
     }
 
     // Nearest speaker block to a station, or null if none is placed nearby.
     private BlockPos findSpeaker(ServerWorld world, BlockPos station) {
-        BlockPos best = null;
-        double bestSq = Double.MAX_VALUE;
-        int r = SPEAKER_SEARCH_RADIUS;
-        for (BlockPos pos : BlockPos.iterate(station.add(-r, -r, -r), station.add(r, r, r))) {
-            if (!(world.getBlockState(pos).getBlock() instanceof SpeakerBlock)) {
-                continue;
-            }
-            double sq = pos.getSquaredDistance(station);
-            if (sq < bestSq) {
-                bestSq = sq;
-                best = pos.toImmutable();
-            }
-        }
-        return best;
+        return BlockEntityScan.nearest(world, station, SPEAKER_SEARCH_RADIUS, SpeakerBlockEntity.class);
     }
 
     private void playFromLead(SoundEvent sound, float volume) {

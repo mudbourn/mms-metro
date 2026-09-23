@@ -1,15 +1,16 @@
 package info.mudbourn.mmsmetro.path;
 
-import info.mudbourn.mmsmetro.block.SpeedBumpBlock;
-import info.mudbourn.mmsmetro.block.StationBlock;
 import info.mudbourn.mmsmetro.block.entity.JunctionBlockEntity;
 import info.mudbourn.mmsmetro.block.entity.SpeedBumpBlockEntity;
 import info.mudbourn.mmsmetro.block.entity.StationBlockEntity;
+import it.unimi.dsi.fastutil.longs.LongIterator;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.block.AbstractRailBlock;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.block.enums.RailShape;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
@@ -18,6 +19,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 // An along-track polyline resolved by walking vanilla rails, with arc-length sampling; cars are positioned by distance along this path, never by guessing.
 public final class RailPath {
@@ -264,10 +266,7 @@ public final class RailPath {
         }
 
         double clamped = Math.max(0.0, Math.min(this.length, s));
-        int i = 0;
-        while (i < this.cumulative.length - 2 && this.cumulative[i + 1] < clamped) {
-            i++;
-        }
+        int i = segmentIndex(clamped);
 
         double segLength = this.cumulative[i + 1] - this.cumulative[i];
         double t = segLength > 1.0e-6 ? (clamped - this.cumulative[i]) / segLength : 0.0;
@@ -306,12 +305,23 @@ public final class RailPath {
         if (this.points.size() < 2) {
             return null;
         }
-        double clamped = Math.max(0.0, Math.min(this.length, s));
-        int i = 0;
-        while (i < this.cumulative.length - 2 && this.cumulative[i + 1] < clamped) {
-            i++;
-        }
+        int i = segmentIndex(Math.max(0.0, Math.min(this.length, s)));
         return this.points.get(i + 1).subtract(this.points.get(i));
+    }
+
+    // Index of the segment holding a clamped arc: the first segment whose end reaches it, or the last segment.
+    private int segmentIndex(double clamped) {
+        int lo = 0;
+        int hi = this.cumulative.length - 2;
+        while (lo < hi) {
+            int mid = (lo + hi) >>> 1;
+            if (this.cumulative[mid + 1] < clamped) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo;
     }
 
     // The direction a train approaching a stop would display: the stop's label when set, else the track's heading of travel; this is what a directed bump is matched against.
@@ -333,13 +343,15 @@ public final class RailPath {
 
     // The tether key a bump targets a station by: the station name with every non-alphanumeric character stripped, an underscore, then the first letter of its direction readout (fixed label or travel heading), so "Fort Kelvin" southbound is "FortKelvin_S". Case-sensitive, so the bump field must match exactly.
     private String stationKey(PathStation station) {
-        String name = station.name().replaceAll("[^A-Za-z0-9]", "");
+        String name = NON_ALPHANUMERIC.matcher(station.name()).replaceAll("");
         String readout = stationReadout(station, headingName(station.arc()));
         if (readout.isEmpty()) {
             return name + "_";
         }
         return name + "_" + readout.substring(0, 1).toUpperCase(java.util.Locale.ROOT);
     }
+
+    private static final Pattern NON_ALPHANUMERIC = Pattern.compile("[^A-Za-z0-9]");
 
     // True when a bump should herald this station: terminus mode also requires the station be a terminus, and either mode still matches the wanted label against the station's readout, with an empty label matching any.
     private static boolean bumpMatches(boolean terminusMode, String wanted, PathStation station, String heading) {
@@ -379,8 +391,8 @@ public final class RailPath {
         }
         Direction travel = pickExit(startShape, initialDir);
         // Keyed by node plus the heading the walk leaves it on, not node alone, so a junction crossed twice on different headings is a legitimate crossing rather than a premature loop; the value is the node's first index for closing the ring.
-        Map<String, Integer> stateIndex = new HashMap<>();
-        stateIndex.put(stateKey(start, travel), 0);
+        Map<WalkState, Integer> stateIndex = new HashMap<>();
+        stateIndex.put(new WalkState(start.toImmutable(), travel), 0);
         BlockPos current = start;
         RailShape currentShape = startShape;
         boolean loop = false;
@@ -409,7 +421,7 @@ public final class RailPath {
             }
 
             // Re-entering a node on the same exit heading repeats the whole future: that is the ring closing, so stop before re-adding it and fold the geometry back to where the state first occurred.
-            String key = stateKey(next, exit);
+            WalkState key = new WalkState(next.toImmutable(), exit);
             Integer seen = stateIndex.get(key);
             if (seen != null) {
                 loop = true;
@@ -450,44 +462,86 @@ public final class RailPath {
     // A run of node indices more than this far apart counts as a separate pass of the track past one marker, so a route that visits a block twice (an out-and-back stub, or a junction crossed on two headings) stops there on each pass.
     private static final int PASS_GAP = 8;
 
-    // Scans every node's neighborhood for markers, then binds one stop per pass of the track: the nearest node within each run of nearby indices, so a block the route passes twice is served twice rather than pinned to a single arc.
+    // Finds every marker near the track, then binds one stop per pass of the track: the nearest node within each run of nearby indices, so a block the route passes twice is served twice rather than pinned to a single arc.
     private static void scanMarks(World world, List<BlockPos> nodes,
                                   List<StationMark> outStations, List<BumpMark> outBumps) {
         int r = BUMP_H_RADIUS;
-        Map<BlockPos, List<double[]>> stationHits = new java.util.LinkedHashMap<>();
-        Map<BlockPos, List<double[]>> bumpHits = new java.util.LinkedHashMap<>();
-
+        Map<BlockPos, List<Integer>> nodeIndices = new HashMap<>();
+        LongOpenHashSet chunks = new LongOpenHashSet();
         for (int i = 0; i < nodes.size(); i++) {
             BlockPos rail = nodes.get(i);
-            for (BlockPos pos : BlockPos.iterate(
-                    rail.add(-r, -STATION_DOWN, -r), rail.add(r, STATION_UP, r))) {
-                double sq = pos.getSquaredDistance(rail);
-                int hOffset = Math.max(Math.abs(pos.getX() - rail.getX()), Math.abs(pos.getZ() - rail.getZ()));
-                if (hOffset <= STATION_H_RADIUS && world.getBlockState(pos).getBlock() instanceof StationBlock) {
-                    stationHits.computeIfAbsent(pos.toImmutable(), p -> new ArrayList<>()).add(new double[]{i, sq});
-                } else if (world.getBlockState(pos).getBlock() instanceof SpeedBumpBlock) {
-                    bumpHits.computeIfAbsent(pos.toImmutable(), p -> new ArrayList<>()).add(new double[]{i, sq});
+            nodeIndices.computeIfAbsent(rail, k -> new ArrayList<>()).add(i);
+            for (int cx = (rail.getX() - r) >> 4; cx <= (rail.getX() + r) >> 4; cx++) {
+                for (int cz = (rail.getZ() - r) >> 4; cz <= (rail.getZ() + r) >> 4; cz++) {
+                    chunks.add(ChunkPos.toLong(cx, cz));
                 }
             }
         }
 
-        for (Map.Entry<BlockPos, List<double[]>> entry : stationHits.entrySet()) {
-            for (int nodeIndex : nearestPerPass(entry.getValue())) {
-                outStations.add(readStationMark(world, entry.getKey(), nodeIndex));
+        List<MarkerHits> stationHits = new ArrayList<>();
+        List<MarkerHits> bumpHits = new ArrayList<>();
+        LongIterator it = chunks.iterator();
+        while (it.hasNext()) {
+            long chunk = it.nextLong();
+            int cx = ChunkPos.getPackedX(chunk);
+            int cz = ChunkPos.getPackedZ(chunk);
+            BlockEntityScan.forEachInChunk(world, cx, cz, StationBlockEntity.class,
+                be -> collectHits(be.getPos(), nodes, nodeIndices, STATION_H_RADIUS, stationHits));
+            BlockEntityScan.forEachInChunk(world, cx, cz, SpeedBumpBlockEntity.class,
+                be -> collectHits(be.getPos(), nodes, nodeIndices, r, bumpHits));
+        }
+        stationHits.sort(MarkerHits.SCAN_ORDER);
+        bumpHits.sort(MarkerHits.SCAN_ORDER);
+
+        for (MarkerHits marker : stationHits) {
+            for (int nodeIndex : nearestPerPass(marker.hits)) {
+                outStations.add(readStationMark(world, marker.pos, nodeIndex));
             }
         }
-        for (Map.Entry<BlockPos, List<double[]>> entry : bumpHits.entrySet()) {
-            BlockPos pos = entry.getKey();
+        for (MarkerHits marker : bumpHits) {
             String direction = "";
             String stationKey = "";
-            if (world.getBlockEntity(pos) instanceof SpeedBumpBlockEntity bump) {
+            if (world.getBlockEntity(marker.pos) instanceof SpeedBumpBlockEntity bump) {
                 direction = bump.getDirection();
                 stationKey = bump.getStationKey();
             }
-            for (int nodeIndex : nearestPerPass(entry.getValue())) {
+            for (int nodeIndex : nearestPerPass(marker.hits)) {
                 outBumps.add(new BumpMark(nodeIndex, direction, stationKey));
             }
         }
+    }
+
+    // Every node a marker sits within reach of, as {node index, squared distance} pairs, added to out when there is at least one.
+    private static void collectHits(BlockPos marker, List<BlockPos> nodes, Map<BlockPos, List<Integer>> nodeIndices,
+                                    int hRadius, List<MarkerHits> out) {
+        List<double[]> hits = new ArrayList<>();
+        int firstNode = Integer.MAX_VALUE;
+        BlockPos.Mutable rail = new BlockPos.Mutable();
+        for (int dx = -hRadius; dx <= hRadius; dx++) {
+            for (int dz = -hRadius; dz <= hRadius; dz++) {
+                for (int dy = -STATION_UP; dy <= STATION_DOWN; dy++) {
+                    List<Integer> indices = nodeIndices.get(rail.set(marker.getX() + dx, marker.getY() + dy, marker.getZ() + dz));
+                    if (indices == null) {
+                        continue;
+                    }
+                    for (int i : indices) {
+                        hits.add(new double[]{i, marker.getSquaredDistance(nodes.get(i))});
+                        firstNode = Math.min(firstNode, i);
+                    }
+                }
+            }
+        }
+        if (!hits.isEmpty()) {
+            out.add(new MarkerHits(marker.toImmutable(), firstNode, hits));
+        }
+    }
+
+    // One marker's hits along the path, with the lowest node index that reaches it for ordering markers the way a node-by-node walk meets them.
+    private record MarkerHits(BlockPos pos, int firstNode, List<double[]> hits) {
+
+        private static final java.util.Comparator<MarkerHits> SCAN_ORDER = (a, b) -> a.firstNode != b.firstNode
+            ? Integer.compare(a.firstNode, b.firstNode)
+            : BlockEntityScan.compareZyx(a.pos, b.pos);
     }
 
     // Splits one marker's hits into passes (runs of node indices no more than PASS_GAP apart) and returns the nearest node of each, so the marker binds once per time the track goes by it.
@@ -554,8 +608,7 @@ public final class RailPath {
     private static final int BUMP_H_RADIUS = 4;
 
     // A walk-state identity: a node together with the heading the walk departs it on, so the loop closes only when the whole future would repeat.
-    private static String stateKey(BlockPos pos, Direction heading) {
-        return pos.getX() + "," + pos.getY() + "," + pos.getZ() + "," + heading;
+    private record WalkState(BlockPos pos, Direction heading) {
     }
 
     // The exit a junction block under this node dictates for a train arriving on the given heading, or null when there is no junction or it leaves that heading unrouted.
