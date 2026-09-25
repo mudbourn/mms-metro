@@ -22,8 +22,8 @@ public final class ModEntities {
             Registries.ENTITY_TYPE,
             id,
             EntityType.Builder.create(MetroCarEntity::new, SpawnGroup.MISC)
-                // Tall enough that a seated rider's eye line sits inside the box, so a level look at the next car targets it and cars can be hopped while stopped, not only while motion jitters the ray onto a short box.
-                .dimensions(1.4f, 2.0f)
+                // Minecart-height box keeps a seated rider's eye above their own car, so the crosshair can reach a sibling car in either direction.
+                .dimensions(1.4f, 0.9f)
                 // A distant train stays tracked and visible; the send interval is left at the default so followers keep dead-reckoning off their velocity between packets and stay as fresh as the ridden car.
                 .maxTrackingRange(10)
                 .build(key)
