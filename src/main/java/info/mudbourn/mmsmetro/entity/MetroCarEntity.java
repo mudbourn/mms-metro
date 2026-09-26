@@ -369,10 +369,10 @@ public class MetroCarEntity extends Entity {
         if (player.shouldCancelInteraction()) {
             return ActionResult.PASS;
         }
-        if (this.getPassengerList().size() >= MAX_PASSENGERS) {
+        if (this.hasPassengers()) {
             return ActionResult.PASS;
         }
-        // Hopping straight from a sibling car forces the mount past vanilla's post-dismount remount gate, so switching cars mid-train always takes once capacity is checked above.
+        // Hopping straight from a sibling car forces the mount past vanilla's post-dismount remount gate, so switching into an empty car mid-train always takes.
         boolean hop = player.getVehicle() instanceof MetroCarEntity && player.getVehicle() != this;
         return player.startRiding(this, hop, false) ? ActionResult.SUCCESS : ActionResult.PASS;
     }
