@@ -8,6 +8,7 @@ import info.mudbourn.mmsmetro.registry.ModEntities;
 import info.mudbourn.mmsmetro.registry.ModItemGroups;
 import info.mudbourn.mmsmetro.registry.ModItems;
 import info.mudbourn.mmsmetro.registry.ModSounds;
+import info.mudbourn.mmsmetro.registry.ModTickets;
 import info.mudbourn.mmsmetro.network.MetroNetworking;
 import info.mudbourn.mmsmetro.station.StationIndex;
 import info.mudbourn.mmsmetro.train.ConsistManager;
@@ -34,6 +35,7 @@ public class MmsMetro implements ModInitializer {
         ModBlockEntities.register();
         ModEntities.register();
         ModSounds.register();
+        ModTickets.register();
 
         ConsistManager.init();
         StationIndex.init();

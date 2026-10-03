@@ -7,11 +7,13 @@ import info.mudbourn.mmsmetro.item.MetroSpawnerItem;
 import info.mudbourn.mmsmetro.path.PathStation;
 import info.mudbourn.mmsmetro.path.RailPath;
 import info.mudbourn.mmsmetro.registry.ModEntities;
+import info.mudbourn.mmsmetro.registry.ModTickets;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
 import net.minecraft.block.AbstractRailBlock;
+import net.minecraft.server.world.ServerChunkManager;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.math.BlockPos;
@@ -36,10 +38,10 @@ public final class ConsistManager {
 
     private static final Map<ServerWorld, Integer> RECONCILE_TIMERS = new HashMap<>();
 
-    // The force-loaded chunks per world, with the car chunks and radius they were expanded from, so an unchanged train skips the rebuild.
+    // The car chunks holding a train ticket per world, with the ticket radius, so an unchanged train skips the rebuild.
     private static final Map<ServerWorld, ForcedChunks> FORCED_CHUNKS = new HashMap<>();
 
-    private record ForcedChunks(int radius, LongSet carChunks, LongSet forced) {
+    private record ForcedChunks(int radius, LongSet carChunks) {
     }
 
     // Every loaded metro car in the world being ticked, gathered once so each consist's headway check shares one entity scan.
@@ -492,7 +494,7 @@ public final class ConsistManager {
         updateForcedChunks(world, list);
     }
 
-    // Keeps the chunks around every live train force-loaded so a moving consist and the rail ahead never fall into an unloaded chunk, which would strand cars and truncate the walked path; the desired set is rebuilt only when a car changes chunk and diffed against the currently forced set.
+    // Keeps the chunks around every live train loaded and simulated so a moving consist and the rail ahead never fall into an unloaded chunk, which would strand cars and truncate the walked path. One unserialized ticket per car chunk carries the whole radius, and the ticket set is diffed only when a car changes chunk.
     private static void updateForcedChunks(ServerWorld world, List<Consist> list) {
         LongSet carChunks = new LongOpenHashSet();
         if (list != null) {
@@ -505,39 +507,31 @@ public final class ConsistManager {
             }
         }
 
-        int radius = MmsMetro.config().chunkRadius;
+        // A ticket of radius r entity-ticks chunks within r - 2 of its centre, so +2 keeps chunkRadius meaning the simulated square it did under forceload.
+        int radius = MmsMetro.config().chunkRadius + 2;
         ForcedChunks previous = FORCED_CHUNKS.get(world);
         if (previous == null ? carChunks.isEmpty() : previous.radius() == radius && previous.carChunks().equals(carChunks)) {
             return;
         }
 
-        LongSet desired = new LongOpenHashSet();
-        for (long carChunk : carChunks) {
-            int cx = ChunkPos.getPackedX(carChunk);
-            int cz = ChunkPos.getPackedZ(carChunk);
-            for (int dx = -radius; dx <= radius; dx++) {
-                for (int dz = -radius; dz <= radius; dz++) {
-                    desired.add(ChunkPos.toLong(cx + dx, cz + dz));
+        ServerChunkManager chunks = world.getChunkManager();
+        for (long key : carChunks) {
+            if (previous == null || previous.radius() != radius || !previous.carChunks().contains(key)) {
+                chunks.addTicket(ModTickets.TRAIN, new ChunkPos(key), radius);
+            }
+        }
+        if (previous != null) {
+            for (long key : previous.carChunks()) {
+                if (previous.radius() != radius || !carChunks.contains(key)) {
+                    chunks.removeTicket(ModTickets.TRAIN, new ChunkPos(key), previous.radius());
                 }
             }
         }
 
-        LongSet current = previous != null ? previous.forced() : new LongOpenHashSet();
-        for (long key : desired) {
-            if (!current.contains(key)) {
-                world.setChunkForced(ChunkPos.getPackedX(key), ChunkPos.getPackedZ(key), true);
-            }
-        }
-        for (long key : current) {
-            if (!desired.contains(key)) {
-                world.setChunkForced(ChunkPos.getPackedX(key), ChunkPos.getPackedZ(key), false);
-            }
-        }
-
-        if (desired.isEmpty()) {
+        if (carChunks.isEmpty()) {
             FORCED_CHUNKS.remove(world);
         } else {
-            FORCED_CHUNKS.put(world, new ForcedChunks(radius, carChunks, desired));
+            FORCED_CHUNKS.put(world, new ForcedChunks(radius, carChunks));
         }
     }
 
