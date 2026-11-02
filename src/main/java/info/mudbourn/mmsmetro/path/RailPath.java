@@ -505,10 +505,32 @@ public final class RailPath {
                 direction = bump.getDirection();
                 stationKey = bump.getStationKey();
             }
+            double nearestRailSq = nearestRailSq(world, marker.pos, r);
+            marker.hits.removeIf(hit -> hit[1] > nearestRailSq + BUMP_TRACK_SLACK_SQ);
+            if (marker.hits.isEmpty()) {
+                continue;
+            }
             for (int nodeIndex : nearestPerPass(marker.hits)) {
                 outBumps.add(new BumpMark(nodeIndex, direction, stationKey));
             }
         }
+    }
+
+    // Squared distance from a marker to the closest rail block of any track in its reach, so a bump binds only to the track it sits on rather than a parallel one beside it.
+    private static double nearestRailSq(World world, BlockPos marker, int hRadius) {
+        double best = Double.MAX_VALUE;
+        BlockPos.Mutable rail = new BlockPos.Mutable();
+        for (int dx = -hRadius; dx <= hRadius; dx++) {
+            for (int dz = -hRadius; dz <= hRadius; dz++) {
+                for (int dy = -STATION_UP; dy <= STATION_DOWN; dy++) {
+                    rail.set(marker.getX() + dx, marker.getY() + dy, marker.getZ() + dz);
+                    if (world.getBlockState(rail).getBlock() instanceof AbstractRailBlock) {
+                        best = Math.min(best, marker.getSquaredDistance(rail));
+                    }
+                }
+            }
+        }
+        return best;
     }
 
     // Every node a marker sits within reach of, as {node index, squared distance} pairs, added to out when there is at least one.
@@ -606,6 +628,9 @@ public final class RailPath {
 
     // Speed bumps reach four blocks out to either side of the track so a train at high speed never overshoots the node the bump binds to.
     private static final int BUMP_H_RADIUS = 4;
+
+    // How much farther (squared) than the closest rail a path's node may sit and still claim a bump, so a bump midway between two tracks serves both.
+    private static final double BUMP_TRACK_SLACK_SQ = 2.0;
 
     // A walk-state identity: a node together with the heading the walk departs it on, so the loop closes only when the whole future would repeat.
     private record WalkState(BlockPos pos, Direction heading) {
