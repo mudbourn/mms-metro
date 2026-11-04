@@ -22,6 +22,12 @@ loom {
 }
 
 repositories {
+    maven {
+        url = "https://maven.squiddev.cc"
+        content {
+            includeGroup("cc.tweaked")
+        }
+    }
 }
 
 dependencies {
@@ -30,6 +36,9 @@ dependencies {
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+
+    modCompileOnly "cc.tweaked:cc-tweaked-${project.minecraft_version}-fabric-api:${project.cc_tweaked_version}"
+    modLocalRuntime "cc.tweaked:cc-tweaked-${project.minecraft_version}-fabric:${project.cc_tweaked_version}"
 }
 
 processResources {

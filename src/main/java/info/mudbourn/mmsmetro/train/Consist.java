@@ -716,6 +716,42 @@ public final class Consist {
         return this.stations.size();
     }
 
+    // Track distance from the head to the stop at a station block, 0 while dwelling there, or -1 when no stop ahead on this run is that block.
+    public double distanceToStation(BlockPos stationPos) {
+        PathStation next = nextStation();
+        if (this.phase == Phase.DWELLING && next != null && next.pos().equals(stationPos)) {
+            return 0.0;
+        }
+        for (int i = this.nextStationIndex; i < this.stations.size(); i++) {
+            PathStation station = this.stations.get(i);
+            if (station.pos().equals(stationPos)) {
+                return Math.max(0.0, station.arc() - this.headArc);
+            }
+        }
+        if (this.loop) {
+            double toSeam = this.path.length() - this.headArc;
+            for (PathStation station : this.stations) {
+                if (station.pos().equals(stationPos)) {
+                    return toSeam + Math.max(0.0, station.arc() - this.path.loopStartArc());
+                }
+            }
+        }
+        return -1.0;
+    }
+
+    // Ticks until the train pulls out of its current stop, 0 when it is not dwelling.
+    public int ticksUntilDeparture() {
+        if (this.phase != Phase.DWELLING) {
+            return 0;
+        }
+        return this.departing ? this.departTimer : this.dwellTimer + DEPART_DELAY_TICKS;
+    }
+
+    // The direction label the train currently shows.
+    public String directionName() {
+        return this.currentDirection;
+    }
+
     private PathStation nextStation() {
         if (this.nextStationIndex < this.stations.size()) {
             return this.stations.get(this.nextStationIndex);

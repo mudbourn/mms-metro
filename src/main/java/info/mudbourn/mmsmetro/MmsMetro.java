@@ -1,6 +1,7 @@
 package info.mudbourn.mmsmetro;
 
 import info.mudbourn.mmsmetro.command.MetroCommand;
+import info.mudbourn.mmsmetro.compat.cc.MetroComputerCraft;
 import info.mudbourn.mmsmetro.config.MetroConfig;
 import info.mudbourn.mmsmetro.registry.ModBlockEntities;
 import info.mudbourn.mmsmetro.registry.ModBlocks;
@@ -14,6 +15,7 @@ import info.mudbourn.mmsmetro.station.StationIndex;
 import info.mudbourn.mmsmetro.train.ConsistManager;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.fabricmc.loader.api.FabricLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,6 +42,9 @@ public class MmsMetro implements ModInitializer {
         ConsistManager.init();
         StationIndex.init();
         MetroNetworking.register();
+        if (FabricLoader.getInstance().isModLoaded("computercraft")) {
+            MetroComputerCraft.register();
+        }
 
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
             MetroCommand.register(dispatcher));
