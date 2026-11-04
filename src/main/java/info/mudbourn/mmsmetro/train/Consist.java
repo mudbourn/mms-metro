@@ -716,27 +716,82 @@ public final class Consist {
         return this.stations.size();
     }
 
-    // Track distance from the head to the stop at a station block, 0 while dwelling there, or -1 when no stop ahead on this run is that block.
-    public double distanceToStation(BlockPos stationPos) {
-        PathStation next = nextStation();
-        if (this.phase == Phase.DWELLING && next != null && next.pos().equals(stationPos)) {
-            return 0.0;
-        }
-        for (int i = this.nextStationIndex; i < this.stations.size(); i++) {
-            PathStation station = this.stations.get(i);
-            if (station.pos().equals(stationPos)) {
-                return Math.max(0.0, station.arc() - this.headArc);
+    // One predicted call at a station: ticks from now until arrival, the direction shown then, and whether the train is already there.
+    public record Visit(double ticks, String direction, boolean atPlatform) {
+    }
+
+    // Upper bound on stops walked when predicting visits, so a route that never reaches the station ends the search.
+    private static final int VISIT_SEARCH_STOPS = 64;
+
+    // Predicts the next calls at a station block by walking the route at top speed, counting dwells, loop laps and turn-arounds.
+    public List<Visit> upcomingVisits(BlockPos stationPos, int max) {
+        List<Visit> visits = new ArrayList<>();
+        double speed = Math.max(1.0e-3, this.config.maxSpeed);
+        double len = this.path.length();
+        double x = this.headArc;
+        int dir = 1;
+        double ticks = 0.0;
+        String label = this.currentDirection;
+        PathStation here = nextStation();
+        if (this.phase == Phase.DWELLING && here != null) {
+            if (here.pos().equals(stationPos)) {
+                visits.add(new Visit(0.0, label, true));
+            }
+            ticks = ticksUntilDeparture();
+            if (!here.direction().isEmpty()) {
+                label = here.direction();
+            }
+            x = here.arc();
+            if (here.terminus()) {
+                dir = -1;
             }
         }
-        if (this.loop) {
-            double toSeam = this.path.length() - this.headArc;
-            for (PathStation station : this.stations) {
-                if (station.pos().equals(stationPos)) {
-                    return toSeam + Math.max(0.0, station.arc() - this.path.loopStartArc());
+        for (int step = 0; step < VISIT_SEARCH_STOPS && visits.size() < max; step++) {
+            PathStation stop = nextStopFrom(x, dir);
+            if (stop == null) {
+                if (this.loop && dir > 0) {
+                    ticks += (len - x) / speed;
+                    x = this.path.loopStartArc() - 1.0e-3;
+                    if (nextStopFrom(x, dir) == null) {
+                        break;
+                    }
+                    continue;
                 }
+                double end = dir > 0 ? len : 0.0;
+                ticks += Math.abs(end - x) / speed;
+                x = end;
+                dir = -dir;
+                if (nextStopFrom(x, dir) == null) {
+                    break;
+                }
+                continue;
+            }
+            ticks += Math.abs(stop.arc() - x) / speed;
+            x = stop.arc();
+            if (stop.pos().equals(stationPos)) {
+                visits.add(new Visit(ticks, label, false));
+            }
+            ticks += (stop.dwellTicks() > 0 ? stop.dwellTicks() : this.config.dwellTicks) + DEPART_DELAY_TICKS;
+            if (!stop.direction().isEmpty()) {
+                label = stop.direction();
+            }
+            if (stop.terminus()) {
+                dir = -dir;
             }
         }
-        return -1.0;
+        return visits;
+    }
+
+    // Nearest station strictly beyond an arc in a travel direction, or null when none lies that way.
+    private PathStation nextStopFrom(double x, int dir) {
+        PathStation best = null;
+        for (PathStation station : this.stations) {
+            boolean ahead = dir > 0 ? station.arc() > x + 1.0e-3 : station.arc() < x - 1.0e-3;
+            if (ahead && (best == null || Math.abs(station.arc() - x) < Math.abs(best.arc() - x))) {
+                best = station;
+            }
+        }
+        return best;
     }
 
     // Ticks until the train pulls out of its current stop, 0 when it is not dwelling.

@@ -2,7 +2,6 @@ package info.mudbourn.mmsmetro.compat.cc;
 
 import dan200.computercraft.api.lua.LuaFunction;
 import dan200.computercraft.api.peripheral.IPeripheral;
-import info.mudbourn.mmsmetro.MmsMetro;
 import info.mudbourn.mmsmetro.block.entity.StationBlockEntity;
 import info.mudbourn.mmsmetro.train.Consist;
 import info.mudbourn.mmsmetro.train.ConsistManager;
@@ -56,30 +55,31 @@ public final class StationPeripheral implements IPeripheral {
         return info;
     }
 
-    // Trains that will stop here, nearest first, with distance in blocks and a rough ETA in seconds at top speed.
+    // Most predicted calls listed per train, so one train can fill several rows of a board.
+    private static final int VISITS_PER_TRAIN = 4;
+
+    // Calls at this stop, soonest first, each train repeated for its later laps or return trips, with a rough ETA in seconds at top speed.
     @LuaFunction(mainThread = true)
     public List<Map<String, Object>> getArrivals() {
         List<Map<String, Object>> arrivals = new ArrayList<>();
         if (!(this.station.getWorld() instanceof ServerWorld world)) {
             return arrivals;
         }
-        double blocksPerSecond = Math.max(1.0e-3, MmsMetro.config().maxSpeed * TICKS_PER_SECOND);
         for (Consist consist : ConsistManager.liveConsists(world)) {
-            double distance = consist.distanceToStation(this.station.getPos());
-            if (distance < 0.0) {
-                continue;
+            for (Consist.Visit visit : consist.upcomingVisits(this.station.getPos(), VISITS_PER_TRAIN)) {
+                Map<String, Object> arrival = new HashMap<>();
+                arrival.put("line", consist.lineName());
+                arrival.put("direction", visit.direction());
+                arrival.put("cars", consist.cars().size());
+                arrival.put("eta", Math.round(visit.ticks() / TICKS_PER_SECOND));
+                arrival.put("atPlatform", visit.atPlatform());
+                arrival.put("departsIn", visit.atPlatform()
+                    ? Math.round(consist.ticksUntilDeparture() / (double) TICKS_PER_SECOND)
+                    : 0L);
+                arrivals.add(arrival);
             }
-            Map<String, Object> arrival = new HashMap<>();
-            arrival.put("line", consist.lineName());
-            arrival.put("direction", consist.directionName());
-            arrival.put("cars", consist.cars().size());
-            arrival.put("distance", Math.round(distance));
-            arrival.put("eta", Math.round(distance / blocksPerSecond));
-            arrival.put("atPlatform", distance == 0.0);
-            arrival.put("departsIn", Math.round(consist.ticksUntilDeparture() / (double) TICKS_PER_SECOND));
-            arrivals.add(arrival);
         }
-        arrivals.sort((a, b) -> Long.compare((Long) a.get("distance"), (Long) b.get("distance")));
+        arrivals.sort((a, b) -> Long.compare((Long) a.get("eta"), (Long) b.get("eta")));
         return arrivals;
     }
 }

@@ -11,9 +11,12 @@ local CONFIG = {
   exitSide = "Left",
   terminus = false,
   textScale = 1,
-  maxArrivals = 3,
   etaPadding = 1.5,
+  etaStepSeconds = 15,
   refreshSeconds = 1,
+  frameSeconds = 0.25,
+  scrollGap = 4,
+  scrollPauseFrames = 8,
   signalTimeoutSeconds = 10,
 }
 
@@ -54,12 +57,32 @@ local function textOn(bg)
   return colors.white
 end
 
--- Write text centred on a row
+-- Frames drawn so far, drives the scrolling of text too wide for its row
+local scrollFrame = 0
+
+-- True during the lit half of each blink second
+local function blinkOn()
+  return math.floor(os.clock()) % 2 == 0
+end
+
+-- The visible slice of text for this frame, scrolling it when wider than width
+local function scrolled(text, width)
+  if #text <= width then
+    return text
+  end
+  local loop = text .. string.rep(" ", CONFIG.scrollGap)
+  local cycle = #loop + CONFIG.scrollPauseFrames
+  local offset = math.max(0, scrollFrame % cycle - CONFIG.scrollPauseFrames)
+  return (loop .. loop):sub(offset + 1, offset + width)
+end
+
+-- Write text centred on a row, scrolling it when too wide
 local function centre(mon, y, text, fg, bg)
   local w = mon.getSize()
   mon.setCursorPos(1, y)
   mon.setBackgroundColor(bg)
   mon.write(string.rep(" ", w))
+  text = scrolled(text, w)
   local x = math.max(1, math.floor((w - #text) / 2) + 1)
   mon.setCursorPos(x, y)
   mon.setTextColor(fg)
@@ -76,7 +99,7 @@ local function row(mon, y, label, value, accent)
   mon.setTextColor(colors.lightGray)
   mon.write(label:sub(1, w - 1))
   mon.setTextColor(accent or colors.white)
-  mon.write((" " .. value):sub(1, math.max(0, w - #label - 1)))
+  mon.write(" " .. scrolled(value, math.max(0, w - #label - 2)))
 end
 
 -- Write a label on the left and a status flush right on one row
@@ -98,9 +121,10 @@ local function clock(seconds)
   return string.format("%d:%02d", math.floor(seconds / 60), seconds % 60)
 end
 
--- Upper-bound whole minutes for an ETA, padded since the raw ETA assumes top speed
-local function upperMinutes(seconds)
-  return math.max(1, math.ceil(seconds * CONFIG.etaPadding / 60))
+-- Upper-bound ETA in seconds, padded since the raw ETA assumes top speed, rounded up to the step
+local function upperSeconds(seconds)
+  local step = CONFIG.etaStepSeconds
+  return math.max(step, math.ceil(seconds * CONFIG.etaPadding / step) * step)
 end
 
 -- Live station settings and arrivals, or CONFIG and no arrivals without a station
@@ -130,7 +154,7 @@ local function arrivalStatus(a, blink)
   if a.atPlatform then
     return "dep " .. clock(a.departsIn), blink and colors.lime or colors.green
   end
-  return upperMinutes(a.eta) .. " min", colors.white
+  return upperSeconds(a.eta) .. "s", colors.white
 end
 
 -- Draw up to max arrivals from row y, stopping before row last
@@ -141,7 +165,7 @@ local function drawArrivals(mon, y, last, arrivals, blink, compact)
     end
     return
   end
-  for i = 1, math.min(#arrivals, CONFIG.maxArrivals) do
+  for i = 1, #arrivals do
     if y > last then
       return
     end
@@ -271,24 +295,32 @@ local function runLocal(channel)
   if not channel and #mons == 0 then
     error("No monitor attached", 0)
   end
-  local blink = false
-  local timer = os.startTimer(CONFIG.refreshSeconds)
+  local info, arrivals = readStation(station)
+  local lastRead = os.clock()
+  local timer = os.startTimer(CONFIG.frameSeconds)
   while true do
-    local info, arrivals = readStation(station)
-    if channel then
-      rednet.broadcast({ channel = channel, info = info, arrivals = arrivals }, PROTOCOL)
+    if os.clock() - lastRead >= CONFIG.refreshSeconds then
+      info, arrivals = readStation(station)
+      lastRead = os.clock()
+      if channel then
+        rednet.broadcast({ channel = channel, info = info, arrivals = arrivals }, PROTOCOL)
+      end
     end
     for _, mon in ipairs(mons) do
-      draw(mon, info, arrivals, blink)
+      draw(mon, info, arrivals, blinkOn())
     end
-    local event, id = os.pullEvent()
-    if event == "timer" and id == timer then
-      blink = not blink
-      timer = os.startTimer(CONFIG.refreshSeconds)
-    elseif event == "peripheral" or event == "peripheral_detach" or event == "monitor_resize" then
-      mons = monitors()
-      station = peripheral.find("metro_station")
-    end
+    scrollFrame = scrollFrame + 1
+    repeat
+      local event, id = os.pullEvent()
+      local redraw = event == "timer" and id == timer
+      if redraw then
+        timer = os.startTimer(CONFIG.frameSeconds)
+      elseif event == "peripheral" or event == "peripheral_detach" or event == "monitor_resize" then
+        mons = monitors()
+        station = peripheral.find("metro_station")
+        redraw = true
+      end
+    until redraw
   end
 end
 
@@ -301,27 +333,30 @@ local function runShow(channel)
   end
   local latest = nil
   local lastHeard = -math.huge
-  local blink = false
-  local timer = os.startTimer(CONFIG.refreshSeconds)
+  local timer = os.startTimer(CONFIG.frameSeconds)
   while true do
     local fresh = latest and os.clock() - lastHeard <= CONFIG.signalTimeoutSeconds
     for _, mon in ipairs(mons) do
       if fresh then
-        draw(mon, latest.info, latest.arrivals, blink)
+        draw(mon, latest.info, latest.arrivals, blinkOn())
       else
         drawNoSignal(mon, channel)
       end
     end
-    local event, a, b, c = os.pullEvent()
-    if event == "timer" and a == timer then
-      blink = not blink
-      timer = os.startTimer(CONFIG.refreshSeconds)
-    elseif event == "rednet_message" and c == PROTOCOL and type(b) == "table" and b.channel == channel then
-      latest = b
-      lastHeard = os.clock()
-    elseif event == "peripheral" or event == "peripheral_detach" or event == "monitor_resize" then
-      mons = monitors()
-    end
+    scrollFrame = scrollFrame + 1
+    repeat
+      local event, a, b, c = os.pullEvent()
+      local redraw = event == "timer" and a == timer
+      if redraw then
+        timer = os.startTimer(CONFIG.frameSeconds)
+      elseif event == "rednet_message" and c == PROTOCOL and type(b) == "table" and b.channel == channel then
+        latest = b
+        lastHeard = os.clock()
+      elseif event == "peripheral" or event == "peripheral_detach" or event == "monitor_resize" then
+        mons = monitors()
+        redraw = true
+      end
+    until redraw
   end
 end
 
