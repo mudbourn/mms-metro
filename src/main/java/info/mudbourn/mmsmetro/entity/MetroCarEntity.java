@@ -13,14 +13,18 @@ import net.minecraft.storage.ReadView;
 import net.minecraft.storage.WriteView;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 
+import java.util.UUID;
+
 // A train car: a pure display entity driven by the consist, not vanilla physics.
 public class MetroCarEntity extends Entity {
 
-    // Position along the resolved path in blocks, from the lead's origin.
+    // Position along the path in blocks.
     private static final TrackedData<Float> ARC_LENGTH =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.FLOAT);
 
@@ -28,14 +32,14 @@ public class MetroCarEntity extends Entity {
     private static final TrackedData<Integer> CAR_INDEX =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.INTEGER);
 
-    // Path-derived orientation, tracked explicitly so the client rotates the model (vanilla rotation sync is unreliable for a teleport-driven entity).
+    // Path-derived orientation synced to the client.
     private static final TrackedData<Float> PATH_YAW =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.FLOAT);
 
     private static final TrackedData<Float> PATH_PITCH =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.FLOAT);
 
-    // Onboard-HUD fields, stamped onto every car each tick so any rider reads the same live line, direction, and next stop; announcement carries the transient "Arriving at..." cue.
+    // Onboard HUD line name.
     private static final TrackedData<String> HUD_LINE =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.STRING);
 
@@ -51,19 +55,19 @@ public class MetroCarEntity extends Entity {
     private static final TrackedData<Boolean> HUD_WAITING =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
 
-    // ARGB colour the HUD tints the line name with, taken from the served station's line colour.
+    // ARGB colour the HUD tints the line name with.
     private static final TrackedData<Integer> HUD_LINE_COLOR =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.INTEGER);
 
-    // True once the train has crossed the approach bump and is braking in, so the HUD reads "Arriving at" rather than "Next stop".
+    // True while the train is braking into a station.
     private static final TrackedData<Boolean> HUD_ARRIVING =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
 
-    // The consist id as a string, tracked so the client can group a train's cars even after a reload, when the in-memory registry is gone.
+    // The train id as a string, synced so the client can group a train's cars.
     private static final TrackedData<String> CONSIST_ID =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.STRING);
 
-    // Path position carried through the DataTracker, the one channel that reaches the client every tick even when vanilla suppresses movement packets for a car near a ridden vehicle; the client drives the body from these rather than from entity-movement packets.
+    // Path position carried through the DataTracker, which the client drives the body from.
     private static final TrackedData<Float> POS_X =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.FLOAT);
 
@@ -73,26 +77,28 @@ public class MetroCarEntity extends Entity {
     private static final TrackedData<Float> POS_Z =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.FLOAT);
 
-    // Client-side interpolation of the tracked orientation.
+    // Previous tracked orientation for client-side interpolation.
     private float prevPathYaw;
     private float prevPathPitch;
 
-    // The arc seen on the client last tick, so a discontinuous jump (a terminus reverse or a chunk-reload teleport) can be snapped rather than eased across.
+    // The arc seen on the client last tick.
     private float lastClientArc;
 
-    // An arc step larger than this between ticks is a rewrite of the path, not motion, so the car hard-snaps to its new pose.
+    // An arc step larger than this between ticks snaps the car to its new pose.
     private static final float ARC_DISCONTINUITY = 8.0f;
 
-    // Smooths the car's position between the consist's per-tick teleports so the body and its riders advance together over the tracking interval instead of the rider trailing the car.
+    // Smooths the car's position between per-tick teleports.
     private final PositionInterpolator interpolator = new PositionInterpolator(this, 1);
 
-    // Groups the cars of one train so a car can be traced to its whole consist even after a reload, when the in-memory registry is gone.
-    private java.util.UUID consistId = java.util.UUID.randomUUID();
+    // The id of the train this car is a view of.
+    private UUID consistId = UUID.randomUUID();
 
-    // The rail and heading the consist's path was walked from, persisted so a reload rebuilds the identical path deterministically rather than re-guessing one that diverges at junctions; null until the consist stamps it.
-    private net.minecraft.util.math.BlockPos pathOrigin;
+    // The rail and heading an older version saved, read only to migrate the car into a saved train.
+    private BlockPos pathOrigin;
 
-    private net.minecraft.util.math.Direction pathInitialDir;
+    private Direction pathInitialDir;
+
+    private boolean spawnedView;
 
     public MetroCarEntity(EntityType<? extends MetroCarEntity> type, World world) {
         super(type, world);
@@ -118,7 +124,7 @@ public class MetroCarEntity extends Entity {
         builder.add(POS_Z, 0.0f);
     }
 
-    // Server-side: publishes this tick's path position onto the DataTracker so every tracking client can drive the body from it.
+    // Publishes this tick's path position onto the DataTracker.
     public void setTrackedPos(double x, double y, double z) {
         this.dataTracker.set(POS_X, (float) x);
         this.dataTracker.set(POS_Y, (float) y);
@@ -129,7 +135,7 @@ public class MetroCarEntity extends Entity {
         return new Vec3d(this.dataTracker.get(POS_X), this.dataTracker.get(POS_Y), this.dataTracker.get(POS_Z));
     }
 
-    // Mirrors the synced consist id onto the client so its cars group even after a reload; the tracked path position is read straight off the tracker each tick in tick(), so it needs no per-field callback.
+    // Mirrors the synced train id onto the client.
     @Override
     public void onTrackedDataSet(TrackedData<?> data) {
         super.onTrackedDataSet(data);
@@ -137,9 +143,8 @@ public class MetroCarEntity extends Entity {
             String synced = this.dataTracker.get(CONSIST_ID);
             if (!synced.isEmpty()) {
                 try {
-                    this.consistId = java.util.UUID.fromString(synced);
+                    this.consistId = UUID.fromString(synced);
                 } catch (IllegalArgumentException ignored) {
-                    // Keep the current id if the synced value is corrupt.
                 }
             }
         }
@@ -173,7 +178,7 @@ public class MetroCarEntity extends Entity {
         return this.dataTracker.get(HUD_ARRIVING);
     }
 
-    // Called by the consist for every car so all riders share one readout.
+    // Sets the shared onboard readout.
     public void setHudInfo(String line, String direction, String nextStation, boolean waiting, int lineColor, boolean arriving) {
         if (!this.dataTracker.get(HUD_LINE).equals(line)) {
             this.dataTracker.set(HUD_LINE, line);
@@ -225,7 +230,7 @@ public class MetroCarEntity extends Entity {
         this.dataTracker.set(PATH_PITCH, value);
     }
 
-    // Linearly interpolated orientation for smooth client rendering; a jump too large to be motion (a terminus turn-around flipping the car about 180 degrees) is snapped rather than spun through.
+    // Interpolated orientation for rendering, snapping across a jump too large to be motion.
     public float getLerpedPathYaw(float tickDelta) {
         float target = this.getPathYaw();
         if (Math.abs(MathHelper.subtractAngles(this.prevPathYaw, target)) > 135.0f) {
@@ -241,18 +246,16 @@ public class MetroCarEntity extends Entity {
     @Override
     public void tick() {
         super.tick();
-        // On the client, advance the interpolator so the car eases between tracked packets and its riders stay glued to it; the server drives position from the consist.
         if (this.getEntityWorld().isClient()) {
             snapOnDiscontinuity();
             this.interpolator.refreshPositionAndAngles(trackedPos(), this.getYaw(), this.getPitch());
             this.interpolator.tick();
         }
-        // Carry orientation forward each tick so the render lerp has a baseline.
         this.prevPathYaw = this.getPathYaw();
         this.prevPathPitch = this.getPathPitch();
     }
 
-    // When the arc jumps too far to be one tick of motion (a terminus reverse or a chunk-reload teleport), clear the interpolator and orientation baseline so the car hard-snaps to its new pose instead of sliding across the gap.
+    // Clears the interpolator and orientation baseline when the arc jumps.
     private void snapOnDiscontinuity() {
         float arc = this.getArcLength();
         if (Math.abs(arc - this.lastClientArc) > ARC_DISCONTINUITY) {
@@ -269,11 +272,11 @@ public class MetroCarEntity extends Entity {
         return this.interpolator;
     }
 
-    public java.util.UUID getConsistId() {
+    public UUID getConsistId() {
         return this.consistId;
     }
 
-    public void setConsistId(java.util.UUID value) {
+    public void setConsistId(UUID value) {
         this.consistId = value;
         this.dataTracker.set(CONSIST_ID, value.toString());
     }
@@ -286,18 +289,21 @@ public class MetroCarEntity extends Entity {
         this.dataTracker.set(CAR_INDEX, value);
     }
 
-    public net.minecraft.util.math.BlockPos getPathOrigin() {
+    public BlockPos getPathOrigin() {
         return this.pathOrigin;
     }
 
-    public net.minecraft.util.math.Direction getPathInitialDir() {
+    public Direction getPathInitialDir() {
         return this.pathInitialDir;
     }
 
-    // Stamped by the consist so the path's identity rides along on the car and survives a reload.
-    public void setPathIdentity(net.minecraft.util.math.BlockPos origin, net.minecraft.util.math.Direction initialDir) {
-        this.pathOrigin = origin;
-        this.pathInitialDir = initialDir;
+    // True for the entities the saved train spawns, false for cars an older version saved.
+    public boolean isView() {
+        return this.spawnedView;
+    }
+
+    public void markView() {
+        this.spawnedView = true;
     }
 
     @Override
@@ -311,48 +317,44 @@ public class MetroCarEntity extends Entity {
         String stored = view.getString("ConsistId", "");
         if (!stored.isEmpty()) {
             try {
-                this.setConsistId(java.util.UUID.fromString(stored));
+                this.setConsistId(UUID.fromString(stored));
             } catch (IllegalArgumentException ignored) {
-                // Keep the freshly generated id if the stored value is corrupt.
             }
         }
         if (view.getInt("PathOriginSet", 0) != 0) {
-            this.pathOrigin = new net.minecraft.util.math.BlockPos(
+            this.pathOrigin = new BlockPos(
                 view.getInt("PathOriginX", 0), view.getInt("PathOriginY", 0), view.getInt("PathOriginZ", 0));
         }
         this.pathInitialDir = parseHorizontalDir(view.getString("PathInitialDir", ""));
     }
 
-    // The horizontal direction a saved name spells, or null when it names none.
-    private static net.minecraft.util.math.Direction parseHorizontalDir(String name) {
+    // The horizontal direction a saved name spells, or null.
+    private static Direction parseHorizontalDir(String name) {
         return switch (name) {
-            case "north" -> net.minecraft.util.math.Direction.NORTH;
-            case "south" -> net.minecraft.util.math.Direction.SOUTH;
-            case "east" -> net.minecraft.util.math.Direction.EAST;
-            case "west" -> net.minecraft.util.math.Direction.WEST;
+            case "north" -> Direction.NORTH;
+            case "south" -> Direction.SOUTH;
+            case "east" -> Direction.EAST;
+            case "west" -> Direction.WEST;
             default -> null;
         };
     }
 
     @Override
     protected void writeCustomData(WriteView view) {
-        view.putFloat("ArcLength", this.getArcLength());
-        view.putInt("CarIndex", this.getCarIndex());
-        view.putFloat("PathYaw", this.getPathYaw());
-        view.putFloat("PathPitch", this.getPathPitch());
-        view.putString("ConsistId", this.consistId.toString());
-        if (this.pathOrigin != null) {
-            view.putInt("PathOriginSet", 1);
-            view.putInt("PathOriginX", this.pathOrigin.getX());
-            view.putInt("PathOriginY", this.pathOrigin.getY());
-            view.putInt("PathOriginZ", this.pathOrigin.getZ());
-        }
-        if (this.pathInitialDir != null) {
-            view.putString("PathInitialDir", this.pathInitialDir.asString());
-        }
     }
 
-    // Seat slots inside the car body as {forward, lateral} offsets in blocks, ordered centre-outward so a lone rider sits in the middle, spanning the minecart's length and width so no one sits over the coupling gap.
+    // Never saved with the chunk or a rider.
+    @Override
+    public boolean shouldSave() {
+        return false;
+    }
+
+    @Override
+    public boolean saveData(WriteView view) {
+        return false;
+    }
+
+    // Seat slots as {forward, lateral} offsets in blocks, centre outward.
     private static final double[][] SEAT_SLOTS = {
         {0.0, 0.0},
         {-0.5, -0.25}, {-0.5, 0.25},
@@ -372,7 +374,6 @@ public class MetroCarEntity extends Entity {
         if (this.hasPassengers()) {
             return ActionResult.PASS;
         }
-        // Hopping straight from a sibling car forces the mount past vanilla's post-dismount remount gate, so switching into an empty car mid-train always takes.
         boolean hop = player.getVehicle() instanceof MetroCarEntity && player.getVehicle() != this;
         return player.startRiding(this, hop, false) ? ActionResult.SUCCESS : ActionResult.PASS;
     }
@@ -382,7 +383,7 @@ public class MetroCarEntity extends Entity {
         return this.getPassengerList().size() < MAX_PASSENGERS;
     }
 
-    // Seats each rider at a distinct slot, rotated into world space by the car's path heading, so riders sit in formation and turn with the car.
+    // Seats each rider at a distinct slot rotated by the car's path heading.
     @Override
     public Vec3d getPassengerRidingPos(Entity passenger) {
         int index = this.getPassengerList().indexOf(passenger);
@@ -395,7 +396,6 @@ public class MetroCarEntity extends Entity {
         double yawRad = Math.toRadians(this.getPathYaw());
         double sin = Math.sin(yawRad);
         double cos = Math.cos(yawRad);
-        // Minecraft yaw 0 faces +Z; forward = (-sin, cos), right = (cos, sin).
         double dx = -sin * forward + cos * lateral;
         double dz = cos * forward + sin * lateral;
         return this.getEntityPos().add(dx, SEAT_HEIGHT, dz);
@@ -406,7 +406,7 @@ public class MetroCarEntity extends Entity {
         return true;
     }
 
-    // Vanilla Entity is not pickable by default; without this the attack raycast skips the car, so left-clicking it with the spawner never registers a hit.
+    // Lets the attack raycast hit the car.
     @Override
     public boolean canHit() {
         return !this.isRemoved();

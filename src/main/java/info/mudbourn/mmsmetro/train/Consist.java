@@ -1,63 +1,72 @@
 package info.mudbourn.mmsmetro.train;
 
-import info.mudbourn.mmsmetro.block.entity.SpeakerBlockEntity;
-import info.mudbourn.mmsmetro.block.entity.StationBlockEntity;
 import info.mudbourn.mmsmetro.config.MetroConfig;
 import info.mudbourn.mmsmetro.entity.MetroCarEntity;
-import info.mudbourn.mmsmetro.path.BlockEntityScan;
+import info.mudbourn.mmsmetro.path.PathBump;
 import info.mudbourn.mmsmetro.path.PathJunction;
 import info.mudbourn.mmsmetro.path.PathPoint;
+import info.mudbourn.mmsmetro.path.PathReverse;
 import info.mudbourn.mmsmetro.path.PathStation;
 import info.mudbourn.mmsmetro.path.RailPath;
+import info.mudbourn.mmsmetro.registry.ModEntities;
 import info.mudbourn.mmsmetro.registry.ModSounds;
-import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.nbt.NbtCompound;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.sound.SoundCategory;
 import net.minecraft.sound.SoundEvent;
 import net.minecraft.sound.SoundEvents;
+import net.minecraft.util.DyeColor;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
+import java.util.UUID;
 
-// An ordered train of cars sharing one path: the lead advances by arc-length, stops and dwells at each station, followers trail at a fixed spacing.
+// One train as saved data: the lead advances by arc-length along a baked path, stops and dwells at each station, and followers trail at a fixed spacing; car entities are views of it.
 public final class Consist {
 
     private enum Phase { RUNNING, DWELLING }
 
-    // Radius, in blocks, to search around a station for a speaker block.
-    private static final int SPEAKER_SEARCH_RADIUS = 5;
-
     // How far ahead, in blocks, a train watches for a junction it may have to yield at.
     private static final double JUNCTION_SCAN = 48.0;
 
-    // Distance, in blocks, a yielding train stops short of the junction node so its front car never sits on the crossing.
+    // Distance, in blocks, a yielding train stops short of the junction node.
     private static final double JUNCTION_YIELD_GAP = 2.0;
 
-    // Radius, in blocks, to search around a junction for the station block whose platform decides priority.
-    private static final int JUNCTION_STATION_RADIUS = 16;
+    // Ticks the train holds after sounding its departure horn before it pulls out.
+    private static final int DEPART_DELAY_TICKS = 60;
 
-    private final List<MetroCarEntity> cars = new ArrayList<>();
+    // Fixed hold served when caught behind a train, in ticks.
+    private static final int BUFFER_HOLD_TICKS = 200;
 
-    private RailPath path;
+    // Slack, in blocks, added to the blocker scan window.
+    private static final double BLOCKER_REACH_MARGIN = 4.0;
+
+    // Upper bound on stops walked when predicting visits.
+    private static final int VISIT_SEARCH_STOPS = 64;
+
+    // Distance, in blocks, within which a station counts as the one a dwelling train stands at.
+    private static final double STATION_REACH = 1.5;
+
+    private final UUID id;
 
     private final MetroConfig config;
 
-    private List<PathStation> stations;
+    private ServerWorld world;
 
-    private List<info.mudbourn.mmsmetro.path.PathBump> bumps;
+    private MetroState state;
 
-    // True when the path is a closed ring the train circles forever instead of shuttling back at the end of the station list.
-    private boolean loop;
+    private RailPath path;
 
-    // Arc through which bumps have already fired; a bump fires when the head crosses from at or below it to past it, so firing never depends on a cursor a marker refresh could desync.
+    private int carCount;
+
+    private MetroCarEntity[] views;
+
+    private boolean lost;
+
     private double firedThroughArc;
 
     private double headArc;
@@ -68,77 +77,59 @@ public final class Consist {
 
     private int dwellTimer;
 
-    // The dwell length resolved for the current stop, so a gated restart repeats it.
     private int currentDwellTicks;
 
     private int nextStationIndex;
 
-    // Set when the current dwell is at a terminus, so the train turns around on departure instead of continuing.
     private boolean reverseAfterDwell;
 
-    // Set once a bump for the upcoming station is crossed, so the train eases down from the bump to a smooth halt at the platform.
     private boolean approachBraking;
 
-    // Arc where the ease-down was armed, the point the bump updated the train, so the brake curve is anchored there rather than to the gap between stations.
     private double easeStartArc;
 
-    // Speed the train was travelling when the ease-down was armed, the top of the anchored brake curve.
     private double easeStartSpeed;
 
-    // True after the head has crossed the ring seam at least once, so followers only wrap around the ring once the whole train has committed to it (never while the lead-in spur is still being ridden).
     private boolean ringCommitted;
 
-    // Ticks the train holds after sounding its departure horn before it actually pulls out (3 seconds).
-    private static final int DEPART_DELAY_TICKS = 60;
-
-    // True while the departure horn has sounded and the train is counting down before it starts moving.
     private boolean departing;
 
     private int departTimer;
 
     private int rollingTimer;
 
-    // Counts down between buffer-wait cues while held behind another train.
-    private int bufferWaitTimer;
-
-    // Fixed hold served when caught behind a train, in ticks (10 seconds).
-    private static final int BUFFER_HOLD_TICKS = 200;
-
-    // Ticks left of the forced hold behind a blocking train, served in full rather than resuming the instant the one ahead moves.
     private int bufferHold;
 
-    // How often the path re-scans the world for markers, in ticks, so ones placed after spawn register without a respawn.
-    private static final int MARKER_REFRESH_INTERVAL = 20;
-
-    private int markerRefreshTimer;
-
-    // The train's live identity for the onboard HUD, set from the last served station (or the first ahead at spawn) until the next arrival changes it.
     private String currentLine = "";
 
     private String currentDirection = "";
 
-    // ARGB tint for the line name on the HUD, taken from the served station's line colour.
     private int currentLineColor = 0xFFF5A623;
 
-    public Consist(RailPath path, MetroConfig config, double initialHeadArc) {
-        this.path = path;
+    private String announcement = "";
+
+    public Consist(UUID id, MetroConfig config, RailPath path, double initialHeadArc, int carCount) {
+        this.id = id;
         this.config = config;
+        this.path = path;
+        this.carCount = carCount;
+        this.views = new MetroCarEntity[carCount];
         this.headArc = Math.min(initialHeadArc, path.length());
-        this.loop = path.isLoop();
-        this.stations = path.stations();
-        this.bumps = path.bumps();
         this.nextStationIndex = firstStationAhead(this.headArc);
         this.firedThroughArc = this.headArc;
         adoptIdentityFromNextStation();
     }
 
-    // Seeds line/colour from the next station ahead so the HUD reads right before the train serves its first stop; direction is the travel heading until the first departure adopts a departed stop's label.
+    // Binds the train to the world and state it runs in.
+    void attach(ServerWorld world, MetroState state) {
+        this.world = world;
+        this.state = state;
+    }
+
     private void adoptIdentityFromNextStation() {
         adoptLineFromNextStation();
         applyTravelHeading();
     }
 
-    // Seeds only line and colour from the next station ahead, leaving the direction readout as it stands.
     private void adoptLineFromNextStation() {
         PathStation next = nextStation();
         if (next != null) {
@@ -147,7 +138,6 @@ public final class Consist {
         }
     }
 
-    // Sets the readout to the compass heading of travel at the head, the direction shown on any leg not covered by a departed stop's fixed label.
     private void applyTravelHeading() {
         String heading = this.path.headingName(this.headArc);
         if (!heading.isEmpty()) {
@@ -155,7 +145,7 @@ public final class Consist {
         }
     }
 
-    // Fixes the readout for the leg the train is pulling out onto: a labelled stop's typed label names the direction leaving it (a terminus's return label included), otherwise the travel heading. Adopted at the departure horn so a labelled stop keeps the inbound heading through the whole approach and dwell and only flips on departure.
+    // Fixes the readout for the leg the train is pulling out onto.
     private void applyDepartureDirection(PathStation departed) {
         if (departed != null && !departed.direction().isEmpty()) {
             this.currentDirection = departed.direction();
@@ -164,86 +154,148 @@ public final class Consist {
         applyTravelHeading();
     }
 
-    // Maps a DyeColor name to an opaque ARGB int for the HUD, defaulting to white for unknown names.
+    // Maps a DyeColor name to an opaque ARGB int, defaulting to white.
     private static int lineColorArgb(String name) {
-        net.minecraft.util.DyeColor dye = net.minecraft.util.DyeColor.byId(name, net.minecraft.util.DyeColor.WHITE);
+        DyeColor dye = DyeColor.byId(name, DyeColor.WHITE);
         return 0xFF000000 | (dye.getEntityColor() & 0xFFFFFF);
     }
 
-    public void addCar(MetroCarEntity car) {
-        this.cars.add(car);
+    public UUID id() {
+        return this.id;
     }
 
-    public List<MetroCarEntity> cars() {
-        return this.cars;
+    public int carCount() {
+        return this.carCount;
+    }
+
+    // Grows the train to at least this many cars.
+    void ensureCars(int count) {
+        if (count > this.carCount) {
+            MetroCarEntity[] grown = new MetroCarEntity[count];
+            System.arraycopy(this.views, 0, grown, 0, this.views.length);
+            this.views = grown;
+            this.carCount = count;
+        }
     }
 
     RailPath path() {
         return this.path;
     }
 
-    // The line the train currently serves, for removing or listing trains by line.
+    // The line the train currently serves.
     public String lineName() {
         return this.currentLine;
     }
 
-    double headArc() {
+    public double headArc() {
         return this.headArc;
     }
 
-    MetroCarEntity lead() {
-        return this.cars.isEmpty() ? null : this.cars.get(0);
+    void setHeadArc(double arc) {
+        this.headArc = Math.min(arc, this.path.length());
+        this.firedThroughArc = this.headArc;
+        this.nextStationIndex = firstStationAhead(this.headArc);
     }
 
     boolean isDwelling() {
         return this.phase == Phase.DWELLING;
     }
 
-    // Length of the whole train along the track, so a junction is only clear once the tail is through it.
-    private double trainLength() {
-        return this.cars.size() * this.config.carSpacing;
+    // The direction label the train currently shows.
+    public String directionName() {
+        return this.currentDirection;
     }
 
-    public void placeCars() {
-        applyCarPositions();
+    // Length of the whole train along the track.
+    private double trainLength() {
+        return this.carCount * this.config.carSpacing;
+    }
+
+    private Vec3d leadPos() {
+        return this.path.sample(this.headArc).pos();
+    }
+
+    // Squared distance from a point to the nearest car.
+    double nearestCarSq(Vec3d point) {
+        double best = Double.MAX_VALUE;
+        for (int i = 0; i < this.carCount; i++) {
+            best = Math.min(best, this.path.sample(carArc(i)).pos().squaredDistanceTo(point));
+        }
+        return best;
+    }
+
+    // True when any car sits within a box of the given half-size around a point.
+    boolean anyCarWithin(Vec3d point, double clearance) {
+        for (int i = 0; i < this.carCount; i++) {
+            Vec3d pos = this.path.sample(carArc(i)).pos();
+            if (Math.abs(pos.x - point.x) <= clearance
+                && Math.abs(pos.y - point.y) <= clearance
+                && Math.abs(pos.z - point.z) <= clearance) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // One summary line for the list command.
+    String describe() {
+        return this.id.toString().substring(0, 8)
+            + " line=" + (this.currentLine.isEmpty() ? "-" : this.currentLine)
+            + " cars=" + this.carCount
+            + " " + this.phase.name().toLowerCase()
+            + " arc=" + Math.round(this.headArc) + "/" + Math.round(this.path.length())
+            + (this.lost ? " LOST (track removed under the train)" : "");
     }
 
     public void tick() {
-        if (this.path.length() <= 0.0) {
+        if (this.lost || this.path.length() <= 0.0) {
             return;
         }
-
         if (this.phase == Phase.DWELLING) {
             tickDwell();
         } else {
-            if (--this.markerRefreshTimer <= 0) {
-                this.markerRefreshTimer = MARKER_REFRESH_INTERVAL;
-                refreshMarkers();
-            }
             tickRunning();
         }
-
-        applyCarPositions();
     }
 
-    // Re-scans the track for markers and re-derives which lie ahead, so ones placed mid-run take effect next pass; only while moving, since a dwell must not disturb the indices.
-    private void refreshMarkers() {
-        ServerWorld world = leadWorld();
-        if (world == null) {
+    // Marks the train stopped because its track no longer exists.
+    void markLost() {
+        this.lost = true;
+        this.speed = 0.0;
+    }
+
+    // Moves the train onto a rebaked copy of its path, keeping the head on the same rail node.
+    void rebased(RailPath old, RailPath fresh) {
+        double mapped = fresh.arcMatching(old, this.headArc);
+        if (Double.isNaN(mapped)) {
+            markLost();
             return;
         }
-        this.path.refreshMarkers(world);
-        this.stations = this.path.stations();
-        this.bumps = this.path.bumps();
-        this.nextStationIndex = firstStationAhead(this.headArc);
-        // Adopt an upcoming line only if the train has not yet served a stop.
+        double shift = mapped - this.headArc;
+        this.path = fresh;
+        this.lost = false;
+        this.headArc = mapped;
+        this.easeStartArc += shift;
+        this.firedThroughArc = mapped;
+        this.nextStationIndex = this.phase == Phase.DWELLING
+            ? stationIndexAt(mapped)
+            : firstStationAhead(mapped);
         if (this.currentLine.isEmpty()) {
             adoptIdentityFromNextStation();
         }
     }
 
+    private int stationIndexAt(double arc) {
+        List<PathStation> stations = this.path.stations();
+        for (int i = 0; i < stations.size(); i++) {
+            if (Math.abs(stations.get(i).arc() - arc) <= STATION_REACH) {
+                return i;
+            }
+        }
+        return firstStationAhead(arc);
+    }
+
     private void tickRunning() {
-        // While serving the forced hold behind a train, stay put even if the one ahead has already pulled away.
         if (this.bufferHold > 0) {
             this.bufferHold--;
             this.speed = 0.0;
@@ -252,28 +304,23 @@ public final class Consist {
 
         PathStation target = nextStation();
         double len = this.path.length();
-        // On a loop, past the last station we cruise toward the seam with no station brake and fold the arc back to the ring start on reaching it.
         boolean wrap = wrappedTarget();
         double stationArc = wrap
             ? Double.POSITIVE_INFINITY
             : (target != null ? target.arc() : len);
 
-        // A train ahead on our own path is a hard stop we hold behind, not a station; the nearer constraint decides where we brake.
         double blockerArc = blockingTrainHoldArc();
-        // A junction a higher-priority train is crossing is a hard stop we hold short of until it clears.
         double junctionArc = junctionYieldArc();
         double targetArc = Math.min(stationArc, Math.min(blockerArc, junctionArc));
         boolean blockedByTrain = blockerArc <= junctionArc && blockerArc < stationArc;
         boolean yieldingJunction = !blockedByTrain && junctionArc < stationArc;
         double remaining = targetArc - this.headArc;
 
-        // Hard stopping distance is the safety floor; a crossed bump starts an earlier, gentler ease-down to the platform.
         double brakingDistance = (this.speed * this.speed) / (2.0 * this.config.acceleration);
         boolean easeToStation = this.approachBraking && !blockedByTrain && !yieldingJunction && target != null;
         if (remaining <= brakingDistance) {
             this.speed = Math.max(0.0, this.speed - this.config.acceleration);
         } else if (easeToStation) {
-            // Constant-deceleration curve anchored at the bump: it holds the arming speed as the head leaves the bump and reaches zero exactly at the platform, so braking begins where the bump updated the train rather than late by the station gap.
             double span = Math.max(1.0e-3, stationArc - this.easeStartArc);
             double stopDist = Math.max(0.0, stationArc - this.headArc);
             double allowed = this.easeStartSpeed * Math.sqrt(stopDist / span);
@@ -285,17 +332,14 @@ public final class Consist {
         this.headArc = Math.min(this.headArc + this.speed, targetArc);
         fireCrossedBumps();
 
-        // Crossing the loop seam is not a stop: fold the arc back to the ring start and resume the station cycle without braking.
         if (wrap && !blockedByTrain && !yieldingJunction && len > 0.0 && this.headArc >= len) {
             double back = this.path.loopStartArc();
             this.headArc = back + (this.headArc - len);
             this.ringCommitted = true;
             this.nextStationIndex = firstStationAtOrAfter(back);
-            // The fold jumps the head past the seam, so fire any bumps sitting just after the ring start before resetting the fired mark.
             fireBumpsBetween(back, this.headArc);
             this.firedThroughArc = this.headArc;
             this.approachBraking = false;
-            this.bufferWaitTimer = 0;
             tickRolling();
             return;
         }
@@ -305,59 +349,53 @@ public final class Consist {
             this.headArc = targetArc;
             this.speed = 0.0;
             if (blockedByTrain) {
-                // Caught behind another train: serve a fixed hold, sounding the cue once.
                 if (this.bufferHold <= 0) {
                     playFromLead(ModSounds.BUFFER_WAIT, 0.8f);
                 }
                 this.bufferHold = BUFFER_HOLD_TICKS;
-            } else if (yieldingJunction) {
-                // Held short of a junction a higher-priority train is crossing: idle and re-check each tick, releasing the instant it clears.
-                this.bufferWaitTimer = 0;
-            } else if (target != null) {
-                arriveAt(target);
-            } else {
-                // Reached the end of the track with no station ahead: shuttle back and take the new heading.
-                reverse(false);
+            } else if (!yieldingJunction) {
+                if (target != null) {
+                    arriveAt(target);
+                } else {
+                    reverse(false);
+                }
             }
             return;
         }
 
-        this.bufferWaitTimer = 0;
         tickRolling();
     }
 
-    // True when the train has served every station and is circling a loop back toward the first across the seam.
+    // True when the train has served every station and is circling a loop back toward the first.
     private boolean wrappedTarget() {
-        return this.loop && !this.stations.isEmpty()
-            && this.nextStationIndex >= this.stations.size();
+        return this.path.isLoop() && !this.path.stations().isEmpty()
+            && this.nextStationIndex >= this.path.stations().size();
     }
 
-    // Slack, in blocks, added to the blocker scan window for a car sampled off its rail node's center and up to a block above or below it.
-    private static final double BLOCKER_REACH_MARGIN = 4.0;
-
-    // Arc we must not pass because a train occupies the track ahead (keeping one car spacing clear), or +infinity when the line is clear within our headway.
+    // Arc we must not pass because a train occupies the track ahead, or +infinity when the line is clear within our headway.
     private double blockingTrainHoldArc() {
-        ServerWorld world = leadWorld();
-        if (world == null || this.cars.isEmpty()) {
-            return Double.POSITIVE_INFINITY;
-        }
-        java.util.UUID myId = this.cars.get(0).getConsistId();
         double scanEnd = Math.min(this.path.length(), this.headArc + this.config.headway + this.config.carSpacing + this.config.maxSpeed);
         double reach = Math.max(0.0, scanEnd - this.headArc) + BLOCKER_REACH_MARGIN;
-        Vec3d head = this.path.sample(this.headArc).pos();
+        Vec3d head = leadPos();
 
         double nearestBlockerArc = Double.POSITIVE_INFINITY;
-        for (MetroCarEntity other : ConsistManager.carsThisTick(world)) {
-            if (other.isRemoved() || other.getConsistId().equals(myId)) {
+        for (Consist other : this.state.trains()) {
+            if (other == this) {
                 continue;
             }
-            if (other.squaredDistanceTo(head) > reach * reach) {
+            double nearReach = reach + other.trainLength();
+            if (other.leadPos().squaredDistanceTo(head) > nearReach * nearReach) {
                 continue;
             }
-            // A car blocks us only when it sits on one of our own rail blocks ahead, so a train on a parallel track that never joins ours is never a blocker.
-            for (double arc : this.path.arcsOnTrack(other.getBlockPos())) {
-                if (arc > this.headArc + 0.5 && arc <= scanEnd && arc < nearestBlockerArc) {
-                    nearestBlockerArc = arc;
+            for (int i = 0; i < other.carCount; i++) {
+                Vec3d pos = other.path.sample(other.carArc(i)).pos();
+                if (pos.squaredDistanceTo(head) > reach * reach) {
+                    continue;
+                }
+                for (double arc : this.path.arcsOnTrack(BlockPos.ofFloored(pos))) {
+                    if (arc > this.headArc + 0.5 && arc <= scanEnd && arc < nearestBlockerArc) {
+                        nearestBlockerArc = arc;
+                    }
                 }
             }
         }
@@ -365,49 +403,41 @@ public final class Consist {
         if (nearestBlockerArc == Double.POSITIVE_INFINITY) {
             return Double.POSITIVE_INFINITY;
         }
-        // Hold a full headway behind the blocker, never closer than one car spacing.
         double gap = Math.max(this.config.headway, this.config.carSpacing);
         return Math.max(this.headArc, nearestBlockerArc - gap);
     }
 
-    // Arc we must not pass because a higher-priority train is crossing a junction ahead of us, or +infinity when no junction ahead is contested.
+    // Arc we must not pass because a higher-priority train is crossing a junction ahead of us, or +infinity when none is contested.
     private double junctionYieldArc() {
-        ServerWorld world = leadWorld();
-        if (world == null || this.cars.isEmpty()) {
-            return Double.POSITIVE_INFINITY;
-        }
-        List<Consist> siblings = ConsistManager.liveConsists(world);
         double hold = Double.POSITIVE_INFINITY;
         for (PathJunction junction : this.path.junctions()) {
             double myArc = junction.arc();
             if (myArc <= this.headArc + 0.5 || myArc - this.headArc > JUNCTION_SCAN) {
                 continue;
             }
-            if (junctionContested(world, siblings, junction)) {
+            if (junctionContested(junction)) {
                 hold = Math.min(hold, Math.max(this.headArc, myArc - JUNCTION_YIELD_GAP));
             }
         }
         return hold;
     }
 
-    // True when a sibling train we must yield to is approaching or occupying this same junction from a different heading.
-    private boolean junctionContested(ServerWorld world, List<Consist> siblings, PathJunction junction) {
+    // True when another train we must yield to is approaching or occupying this junction from a different heading.
+    private boolean junctionContested(PathJunction junction) {
         String myHeading = this.path.headingName(junction.arc());
-        for (Consist other : siblings) {
-            if (other == this || other.cars().isEmpty()) {
+        for (Consist other : this.state.trains()) {
+            if (other == this) {
                 continue;
             }
-            for (double otherArc : other.path().arcsOnTrack(junction.rail())) {
-                double otherHead = other.headArc();
-                // The other train contends only while the junction lies from just behind its tail to within the scan window ahead.
+            for (double otherArc : other.path.arcsOnTrack(junction.rail())) {
+                double otherHead = other.headArc;
                 if (otherArc <= otherHead - other.trainLength() - 0.5 || otherArc - otherHead > JUNCTION_SCAN) {
                     continue;
                 }
-                // Same heading through the node is a follow, not a crossing; car spacing already handles it.
-                if (myHeading.equals(other.path().headingName(otherArc))) {
+                if (myHeading.equals(other.path.headingName(otherArc))) {
                     continue;
                 }
-                if (!hasJunctionPriority(world, other, junction.rail())) {
+                if (!hasJunctionPriority(other, junction)) {
                     return true;
                 }
             }
@@ -415,55 +445,39 @@ public final class Consist {
         return false;
     }
 
-    // True when we outrank the other train at a junction: a train stopped at its platform clears first, otherwise the train nearer the junction's station block goes, ties broken by consist id.
-    private boolean hasJunctionPriority(ServerWorld world, Consist other, BlockPos junctionRail) {
+    // True when we outrank the other train at a junction: a dwelling train goes first, then the one nearer the junction's station, ties broken by id.
+    private boolean hasJunctionPriority(Consist other, PathJunction junction) {
         if (this.isDwelling() != other.isDwelling()) {
             return this.isDwelling();
         }
-        MetroCarEntity myLead = lead();
-        MetroCarEntity otherLead = other.lead();
-        if (myLead == null || otherLead == null) {
-            return true;
-        }
-        BlockPos station = nearestStationBlock(world, junctionRail);
-        Vec3d target = station != null
-            ? Vec3d.ofCenter(station)
-            : Vec3d.ofCenter(junctionRail);
-        double myDist = myLead.squaredDistanceTo(target);
-        double otherDist = otherLead.squaredDistanceTo(target);
+        Vec3d target = junction.station() != null
+            ? Vec3d.ofCenter(junction.station())
+            : Vec3d.ofCenter(junction.rail());
+        double myDist = leadPos().squaredDistanceTo(target);
+        double otherDist = other.leadPos().squaredDistanceTo(target);
         if (Math.abs(myDist - otherDist) < 1.0e-3) {
-            return myLead.getConsistId().compareTo(otherLead.getConsistId()) < 0;
+            return this.id.compareTo(other.id) < 0;
         }
         return myDist < otherDist;
     }
 
-    // Nearest station block to a junction, whose platform is the point priority is measured against, or null when none sits close by.
-    private BlockPos nearestStationBlock(ServerWorld world, BlockPos junctionRail) {
-        return BlockEntityScan.nearest(world, junctionRail, JUNCTION_STATION_RADIUS, StationBlockEntity.class);
-    }
-
     private void arriveAt(PathStation station) {
-        playArrival(station);
+        SpeakerSound.play(this.world, station.speaker(), ModSounds.ARRIVAL);
         this.phase = Phase.DWELLING;
-        // Fresh stop: clear any leftover departure countdown from the previous one.
         this.departing = false;
         this.departTimer = 0;
-        // Served this stop: disarm the ease-down until the next bump arms it again.
         this.approachBraking = false;
-        // A station's own dwell overrides the global default when it sets one.
         this.currentDwellTicks = station.dwellTicks() > 0 ? station.dwellTicks() : this.config.dwellTicks;
         this.dwellTimer = this.currentDwellTicks;
         this.reverseAfterDwell = station.terminus();
-        // Serving this stop makes the train take on its line and colour; direction stays derived from travel.
         if (!station.line().isEmpty()) {
             this.currentLine = station.line();
         }
         this.currentLineColor = lineColorArgb(station.lineColor());
-        // Stopped and dwelling: a boarding status while the train waits; the stop name is on the grey HUD line.
-        setAnnouncement("The train will depart shortly.");
+        this.announcement = "The train will depart shortly.";
     }
 
-    // The departing cue: the next stop's transfer if any, then the stay-seated warning. The next stop's name is left to the grey HUD line.
+    // The departing cue: the next stop's transfer if any, then the stay-seated warning.
     private String buildDepartAnnouncement() {
         PathStation next = nextStation();
         StringBuilder sb = new StringBuilder();
@@ -475,23 +489,22 @@ public final class Consist {
     }
 
     private void tickDwell() {
-        // Counting down the post-horn hold: stay put until the delay elapses, then pull out.
         if (this.departing) {
             if (this.departTimer > 0) {
                 this.departTimer--;
                 return;
             }
-            this.departing = false;
-            this.phase = Phase.RUNNING;
             if (this.reverseAfterDwell) {
-                // The station commanded a turn-around: rebuild the path the other way, holding the return direction the horn set.
+                if (!reverse(true)) {
+                    return;
+                }
                 this.reverseAfterDwell = false;
-                reverse(true);
             } else {
                 this.nextStationIndex++;
             }
-            // Pulling out: announce the next stop, its transfer, and the track warning.
-            setAnnouncement(buildDepartAnnouncement());
+            this.departing = false;
+            this.phase = Phase.RUNNING;
+            this.announcement = buildDepartAnnouncement();
             return;
         }
 
@@ -500,17 +513,13 @@ public final class Consist {
             return;
         }
 
-        // Dwell elapsed: only depart if the train ahead has pulled far enough clear.
         if (!Double.isInfinite(blockingTrainHoldArc())) {
-            // Still too close: restart the wait and re-sound the cue rather than departing into it.
             this.dwellTimer = this.currentDwellTicks;
             playFromLead(ModSounds.BUFFER_WAIT, 0.8f);
             return;
         }
 
-        // Sound the departure horn, then hold DEPART_DELAY_TICKS before the train starts moving.
         playFromLead(ModSounds.DEPARTURE, 1.0f);
-        // The horn is the cue to flip the readout onto the leg the train is about to run: the stop it is leaving names that direction, so a labelled stop (a terminus's return label included) flips only now, after holding the inbound heading through the whole approach and dwell.
         applyDepartureDirection(nextStation());
         this.departing = true;
         this.departTimer = DEPART_DELAY_TICKS;
@@ -518,7 +527,6 @@ public final class Consist {
 
     private void tickRolling() {
         if (this.speed <= 0.05) {
-            // Reset so the beat restarts in phase the moment the train moves again.
             this.rollingTimer = 0;
             return;
         }
@@ -528,83 +536,145 @@ public final class Consist {
         this.rollingTimer = 20;
         double speedRatio = Math.min(1.0, this.speed / this.config.maxSpeed);
         float pitch = 0.7f + (float) speedRatio * 0.5f;
-        // Fade the volume with speed so the roar tapers to near-silence as the train brakes into a stop, instead of a full-volume instance lingering through the dwell.
         float volume = 0.5f * (float) speedRatio;
-        ServerWorld world = leadWorld();
-        if (world == null || this.cars.isEmpty()) {
+        MetroCarEntity lead = this.views[0];
+        if (lead == null || lead.isRemoved()) {
             return;
         }
-        // Play from the lead entity so the sound tracks the moving train instead of staying pinned to where it fired.
-        world.playSoundFromEntity(null, this.cars.get(0), SoundEvents.ENTITY_MINECART_RIDING,
+        this.world.playSoundFromEntity(null, lead, SoundEvents.ENTITY_MINECART_RIDING,
             SoundCategory.NEUTRAL, volume, pitch);
     }
 
-    private void applyCarPositions() {
+    // Arc of one car, trailing the head and wrapping behind the loop seam once the train has committed to the ring.
+    private double carArc(int index) {
+        double len = this.path.length();
+        double back = this.path.loopStartArc();
+        boolean onRing = this.path.isLoop() && len > 0.0 && (back == 0.0 || this.ringCommitted);
+        double arc = this.headArc - index * this.config.carSpacing;
+        if (onRing) {
+            double ringLen = len - back;
+            if (arc < back && ringLen > 0.0) {
+                arc = len - ((back - arc) % ringLen);
+            }
+            return arc;
+        }
+        return Math.max(0.0, arc);
+    }
+
+    // Makes each car entity exist exactly where its chunk is loaded and entity-ticking, and seats it on the path.
+    public void syncViews() {
         PathStation next = nextStation();
         String nextName = next != null ? next.name() : "";
         boolean waiting = this.phase == Phase.DWELLING;
         boolean arriving = this.approachBraking && this.phase == Phase.RUNNING;
-        double len = this.path.length();
-        double back = this.path.loopStartArc();
-        // Followers wrap behind the seam into the ring span only once the train has looped at least once (or the whole path is a ring); until then they clamp, so the tail never teleports onto the ring while the lead-in spur is still being ridden.
-        boolean onRing = this.loop && len > 0.0 && (back == 0.0 || this.ringCommitted);
-        BlockPos pathOrigin = this.path.origin();
-        Direction pathInitialDir = this.path.initialDir();
-        for (int i = 0; i < this.cars.size(); i++) {
-            double arc = this.headArc - i * this.config.carSpacing;
-            if (onRing) {
-                double ringLen = len - back;
-                if (arc < back && ringLen > 0.0) {
-                    arc = len - ((back - arc) % ringLen);
-                }
-            } else {
-                arc = Math.max(0.0, arc);
-            }
+        for (int i = 0; i < this.carCount; i++) {
+            double arc = carArc(i);
             PathPoint point = this.path.sample(arc);
-            MetroCarEntity car = this.cars.get(i);
+            MetroCarEntity car = this.views[i];
+            if (car != null && car.isRemoved()) {
+                car = null;
+                this.views[i] = null;
+            }
+            boolean active = this.world.shouldTickEntityAt(BlockPos.ofFloored(point.pos()));
+            if (!active && (car == null || !car.hasPlayerRider())) {
+                if (car != null) {
+                    despawn(car);
+                    this.views[i] = null;
+                }
+                continue;
+            }
+            if (car == null) {
+                car = spawnView(i, point);
+                if (car == null) {
+                    continue;
+                }
+                this.views[i] = car;
+            }
             car.setPosition(point.pos().x, point.pos().y, point.pos().z);
             car.setYaw(point.yaw());
             car.setPitch(point.pitch());
             car.setPathYaw(point.yaw());
             car.setPathPitch(point.pitch());
-            // Publish the position through the DataTracker, the channel that reaches the client every tick even while a rider is aboard; the client drives the body from this, not from vanilla movement packets.
             car.setTrackedPos(point.pos().x, point.pos().y, point.pos().z);
             car.setArcLength((float) arc);
-            car.setPathIdentity(pathOrigin, pathInitialDir);
             car.setHudInfo(this.currentLine, this.currentDirection, nextName, waiting, this.currentLineColor, arriving);
-            // Re-seat riders onto the car's new position this same tick, so entity tick order never leaves them a tick behind.
+            car.setHudAnnouncement(this.announcement);
             for (Entity passenger : car.getPassengerList()) {
                 car.updatePassengerPosition(passenger);
             }
         }
     }
 
-    // Pushes an announcement string onto every car so all riders see it at once.
-    private void setAnnouncement(String text) {
-        for (MetroCarEntity car : this.cars) {
-            car.setHudAnnouncement(text);
+    private MetroCarEntity spawnView(int index, PathPoint point) {
+        MetroCarEntity car = new MetroCarEntity(ModEntities.METRO_CAR, this.world);
+        car.markView();
+        car.setConsistId(this.id);
+        car.setCarIndex(index);
+        car.setPosition(point.pos().x, point.pos().y, point.pos().z);
+        return this.world.spawnEntity(car) ? car : null;
+    }
+
+    // Removes a view, leaving any non-player rider standing where it is.
+    private static void despawn(MetroCarEntity car) {
+        dismountMobs(car);
+        car.discard();
+    }
+
+    private static void dismountMobs(MetroCarEntity car) {
+        for (Entity passenger : new ArrayList<>(car.getPassengerList())) {
+            if (!(passenger instanceof PlayerEntity)) {
+                passenger.stopRiding();
+            }
         }
     }
 
-    // Fires the arrival announcement for every bump the head advanced across this tick and rings the upcoming station's speaker so waiting passengers hear the train approaching.
+    // Dismounts non-player riders from every view and removes the views.
+    void despawnViews() {
+        for (int i = 0; i < this.views.length; i++) {
+            if (this.views[i] != null) {
+                despawn(this.views[i]);
+                this.views[i] = null;
+            }
+        }
+    }
+
+    // Dismounts non-player riders from every view, keeping the views.
+    void dismountMobs() {
+        for (MetroCarEntity car : this.views) {
+            if (car != null) {
+                dismountMobs(car);
+            }
+        }
+    }
+
+    // Removes every live view.
+    void discardViews() {
+        for (int i = 0; i < this.views.length; i++) {
+            if (this.views[i] != null) {
+                this.views[i].discard();
+                this.views[i] = null;
+            }
+        }
+    }
+
+    // Fires the arrival announcement for every bump the head advanced across this tick.
     private void fireCrossedBumps() {
         fireBumpsBetween(this.firedThroughArc, this.headArc);
         this.firedThroughArc = this.headArc;
     }
 
-    // Fires every bump whose arc lies in (from, to]; scanning the whole list each tick means firing never depends on a cursor, so a mid-run marker refresh can never skip a bump.
+    // Fires every bump whose arc lies in (from, to].
     private void fireBumpsBetween(double from, double to) {
         if (to <= from) {
             return;
         }
-        for (info.mudbourn.mmsmetro.path.PathBump bump : this.bumps) {
+        for (PathBump bump : this.path.bumps()) {
             double arc = bump.arc();
             if (arc <= from + 1.0e-6 || arc > to + 1.0e-6) {
                 continue;
             }
-            setAnnouncement(buildAnnouncement(bump));
-            playIncomingAtStation(bump.stationPos());
-            // Crossing the bump arms the ease-down and anchors its curve at this point, unless one is already running toward a nearer stop.
+            this.announcement = buildAnnouncement(bump);
+            SpeakerSound.play(this.world, bump.speaker(), ModSounds.TRAIN_INCOMING);
             if (!this.approachBraking) {
                 this.easeStartArc = this.headArc;
                 this.easeStartSpeed = Math.max(this.speed, this.config.acceleration);
@@ -613,20 +683,8 @@ public final class Consist {
         }
     }
 
-    // Plays the "train incoming" cue from the station's speaker, or not at all when the platform has none.
-    private void playIncomingAtStation(BlockPos station) {
-        ServerWorld world = leadWorld();
-        if (world == null || station == null) {
-            return;
-        }
-        BlockPos speaker = findSpeaker(world, station);
-        if (speaker != null) {
-            playFromSpeaker(world, speaker, ModSounds.TRAIN_INCOMING);
-        }
-    }
-
-    // The approaching cue a bump announces, in future tense, showing where the exits will be. The stop name is carried by the grey HUD line.
-    private static String buildAnnouncement(info.mudbourn.mmsmetro.path.PathBump bump) {
+    // The approaching cue a bump announces, showing where the exits will be.
+    private static String buildAnnouncement(PathBump bump) {
         String exit = bump.exitDirection();
         StringBuilder sb = new StringBuilder();
         if (bump.terminal()) {
@@ -640,39 +698,28 @@ public final class Consist {
         return sb.toString();
     }
 
-    // Turns the train around: rebuild the path back the way it came, flip the car order so the old tail leads, and re-seat every car; used at termini and dead ends so it shuttles instead of parking. keepDirection holds the readout the departure horn already set for the return leg, so a terminus turn-around does not snap it back to the heading of the curve it sits on.
-    private void reverse(boolean keepDirection) {
-        ServerWorld world = leadWorld();
-        if (world == null || this.cars.isEmpty()) {
+    // Turns the train around onto the baked path leading back from its turn-around point, flipping the car order so the old tail leads.
+    private boolean reverse(boolean keepDirection) {
+        PathReverse turn = this.path.reverseAt(this.headArc);
+        RailPath next = turn == null ? null : this.state.pathLoaded(turn.key());
+        if (next == null) {
             this.speed = 0.0;
-            return;
+            return false;
         }
 
-        MetroCarEntity oldLead = this.cars.get(0);
-        Direction newDir = horizontalFromYaw(oldLead.getPathYaw()).getOpposite();
-        BlockPos startRail = ConsistManager.findRail(world,
-            BlockPos.ofFloored(oldLead.getX(), oldLead.getY(), oldLead.getZ()));
-        if (startRail == null) {
-            this.speed = 0.0;
-            return;
+        for (int i = 0; i < this.views.length / 2; i++) {
+            MetroCarEntity swap = this.views[i];
+            this.views[i] = this.views[this.views.length - 1 - i];
+            this.views[this.views.length - 1 - i] = swap;
+        }
+        for (int i = 0; i < this.views.length; i++) {
+            if (this.views[i] != null) {
+                this.views[i].setCarIndex(i);
+            }
         }
 
-        RailPath newPath = RailPath.build(world, startRail, newDir, RailPath.MAX_NODES);
-        if (newPath.length() <= 0.0) {
-            this.speed = 0.0;
-            return;
-        }
-
-        Collections.reverse(this.cars);
-        for (int i = 0; i < this.cars.size(); i++) {
-            this.cars.get(i).setCarIndex(i);
-        }
-
-        this.path = newPath;
-        this.loop = newPath.isLoop();
-        this.stations = newPath.stations();
-        this.bumps = newPath.bumps();
-        this.headArc = Math.min((this.cars.size() - 1) * this.config.carSpacing, newPath.length());
+        this.path = next;
+        this.headArc = Math.min((this.carCount - 1) * this.config.carSpacing, next.length());
         this.speed = 0.0;
         this.phase = Phase.RUNNING;
         this.approachBraking = false;
@@ -684,44 +731,33 @@ public final class Consist {
         } else {
             adoptIdentityFromNextStation();
         }
-        applyCarPositions();
+        return true;
     }
 
-    // Nearest cardinal direction for a Minecraft yaw (0=south, 90=west, ...).
-    private static Direction horizontalFromYaw(float yaw) {
-        return switch (Math.floorMod(Math.round(yaw / 90.0f), 4)) {
-            case 0 -> Direction.SOUTH;
-            case 1 -> Direction.WEST;
-            case 2 -> Direction.NORTH;
-            default -> Direction.EAST;
-        };
-    }
-
-    // First station at or beyond the ring start, so a stop sitting on the seam is served each lap rather than skipped by a strict-ahead test.
+    // First station at or beyond an arc, so a stop on the loop seam is served each lap.
     private int firstStationAtOrAfter(double arc) {
-        for (int i = 0; i < this.stations.size(); i++) {
-            if (this.stations.get(i).arc() >= arc - 1.0e-3) {
+        List<PathStation> stations = this.path.stations();
+        for (int i = 0; i < stations.size(); i++) {
+            if (stations.get(i).arc() >= arc - 1.0e-3) {
                 return i;
             }
         }
-        return this.stations.size();
+        return stations.size();
     }
 
     private int firstStationAhead(double arc) {
-        for (int i = 0; i < this.stations.size(); i++) {
-            if (this.stations.get(i).arc() > arc + 1.0e-3) {
+        List<PathStation> stations = this.path.stations();
+        for (int i = 0; i < stations.size(); i++) {
+            if (stations.get(i).arc() > arc + 1.0e-3) {
                 return i;
             }
         }
-        return this.stations.size();
+        return stations.size();
     }
 
     // One predicted call at a station: ticks from now until arrival, the direction shown then, and whether the train is already there.
     public record Visit(double ticks, String direction, boolean atPlatform) {
     }
-
-    // Upper bound on stops walked when predicting visits, so a route that never reaches the station ends the search.
-    private static final int VISIT_SEARCH_STOPS = 64;
 
     // Predicts the next calls at a station block by walking the route at top speed, counting dwells, loop laps and turn-arounds.
     public List<Visit> upcomingVisits(BlockPos stationPos, int max) {
@@ -749,7 +785,7 @@ public final class Consist {
         for (int step = 0; step < VISIT_SEARCH_STOPS && visits.size() < max; step++) {
             PathStation stop = nextStopFrom(x, dir);
             if (stop == null) {
-                if (this.loop && dir > 0) {
+                if (this.path.isLoop() && dir > 0) {
                     ticks += (len - x) / speed;
                     x = this.path.loopStartArc() - 1.0e-3;
                     if (nextStopFrom(x, dir) == null) {
@@ -785,7 +821,7 @@ public final class Consist {
     // Nearest station strictly beyond an arc in a travel direction, or null when none lies that way.
     private PathStation nextStopFrom(double x, int dir) {
         PathStation best = null;
-        for (PathStation station : this.stations) {
+        for (PathStation station : this.path.stations()) {
             boolean ahead = dir > 0 ? station.arc() > x + 1.0e-3 : station.arc() < x - 1.0e-3;
             if (ahead && (best == null || Math.abs(station.arc() - x) < Math.abs(best.arc() - x))) {
                 best = station;
@@ -802,135 +838,77 @@ public final class Consist {
         return this.departing ? this.departTimer : this.dwellTimer + DEPART_DELAY_TICKS;
     }
 
-    // The direction label the train currently shows.
-    public String directionName() {
-        return this.currentDirection;
-    }
-
     private PathStation nextStation() {
-        if (this.nextStationIndex < this.stations.size()) {
-            return this.stations.get(this.nextStationIndex);
+        List<PathStation> stations = this.path.stations();
+        if (this.nextStationIndex < stations.size()) {
+            return stations.get(this.nextStationIndex);
         }
-        // Past the last stop on a loop, the next station is the first one again.
-        if (this.loop && !this.stations.isEmpty()) {
-            return this.stations.get(0);
+        if (this.path.isLoop() && !stations.isEmpty()) {
+            return stations.get(0);
         }
         return null;
     }
 
-    private void playArrival(PathStation station) {
-        ServerWorld world = leadWorld();
-        if (world == null) {
-            return;
-        }
-
-        BlockPos speaker = findSpeaker(world, station.pos());
-        if (speaker != null) {
-            playFromSpeaker(world, speaker, ModSounds.ARRIVAL);
-        }
-    }
-
-    // Range, in blocks, a speaker's jingle carries, both straight-line and along the open path it spreads through.
-    private static final int SPEAKER_RANGE = 24;
-
-    // Sends a speaker jingle only to players whose head the sound reaches through open blocks, so it never bleeds through the walls or floors of an enclosed platform.
-    private void playFromSpeaker(ServerWorld world, BlockPos speaker, SoundEvent sound) {
-        Vec3d source = Vec3d.ofCenter(speaker);
-        List<net.minecraft.server.network.ServerPlayerEntity> listeners = new ArrayList<>();
-        for (net.minecraft.server.network.ServerPlayerEntity player : world.getPlayers()) {
-            if (player.squaredDistanceTo(source) <= (double) SPEAKER_RANGE * SPEAKER_RANGE) {
-                listeners.add(player);
-            }
-        }
-        if (listeners.isEmpty()) {
-            return;
-        }
-        Set<BlockPos> ears = new HashSet<>();
-        for (net.minecraft.server.network.ServerPlayerEntity player : listeners) {
-            ears.add(BlockPos.ofFloored(player.getEyePos()));
-        }
-        Set<BlockPos> heard = speakerReach(world, speaker, ears);
-        net.minecraft.registry.entry.RegistryEntry<SoundEvent> entry =
-            net.minecraft.registry.entry.RegistryEntry.of(sound);
-        long seed = world.getRandom().nextLong();
-        for (net.minecraft.server.network.ServerPlayerEntity player : listeners) {
-            if (!heard.contains(BlockPos.ofFloored(player.getEyePos()))) {
-                continue;
-            }
-            player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.PlaySoundS2CPacket(
-                entry, SoundCategory.NEUTRAL, source.x, source.y, source.z, 1.0f, 1.0f, seed));
-        }
-    }
-
-    // The ears among the given blocks that the speaker's sound spreads into by stepping through blocks that are not full solid cubes, so rails, slabs and railings pass it while walls and floors stop it; the spread stops once every ear is reached.
-    private static Set<BlockPos> speakerReach(ServerWorld world, BlockPos speaker, Set<BlockPos> ears) {
-        Set<BlockPos> seen = new HashSet<>();
-        seen.add(speaker);
-        Set<BlockPos> reached = new HashSet<>();
-        if (ears.contains(speaker)) {
-            reached.add(speaker);
-        }
-        List<BlockPos> frontier = List.of(speaker);
-        for (int step = 0; step < SPEAKER_RANGE && !frontier.isEmpty() && reached.size() < ears.size(); step++) {
-            List<BlockPos> next = new ArrayList<>();
-            for (BlockPos pos : frontier) {
-                for (Direction dir : Direction.values()) {
-                    BlockPos neighbor = pos.offset(dir);
-                    if (!world.isPosLoaded(neighbor) || !seen.add(neighbor)) {
-                        continue;
-                    }
-                    if (ears.contains(neighbor)) {
-                        reached.add(neighbor);
-                    }
-                    BlockState state = world.getBlockState(neighbor);
-                    if (!Block.isShapeFullCube(state.getCollisionShape(world, neighbor))) {
-                        next.add(neighbor);
-                    }
-                }
-            }
-            frontier = next;
-        }
-        return reached;
-    }
-
-    // Nearest speaker block to a station, or null if none is placed nearby.
-    private BlockPos findSpeaker(ServerWorld world, BlockPos station) {
-        return BlockEntityScan.nearest(world, station, SPEAKER_SEARCH_RADIUS, SpeakerBlockEntity.class);
-    }
-
     private void playFromLead(SoundEvent sound, float volume) {
-        playFromLead(sound, volume, 1.0f);
-    }
-
-    private void playFromLead(SoundEvent sound, float volume, float pitch) {
-        ServerWorld world = leadWorld();
-        if (world == null || this.cars.isEmpty()) {
+        Vec3d pos = leadPos();
+        if (!this.world.isPosLoaded(BlockPos.ofFloored(pos))) {
             return;
         }
-        MetroCarEntity lead = this.cars.get(0);
-        world.playSound(null, lead.getX(), lead.getY(), lead.getZ(),
-            sound, SoundCategory.NEUTRAL, volume, pitch);
+        this.world.playSound(null, pos.x, pos.y, pos.z, sound, SoundCategory.NEUTRAL, volume, 1.0f);
     }
 
-    private ServerWorld leadWorld() {
-        if (this.cars.isEmpty()) {
-            return null;
-        }
-        return this.cars.get(0).getEntityWorld() instanceof ServerWorld world ? world : null;
+    // Serializes the train's motion and display state.
+    NbtCompound toNbt() {
+        NbtCompound nbt = new NbtCompound();
+        nbt.putString("Id", this.id.toString());
+        nbt.put("Path", this.path.key().toNbt());
+        nbt.putInt("Cars", this.carCount);
+        nbt.putBoolean("Lost", this.lost);
+        nbt.putDouble("HeadArc", this.headArc);
+        nbt.putDouble("Speed", this.speed);
+        nbt.putInt("Phase", this.phase.ordinal());
+        nbt.putInt("DwellTimer", this.dwellTimer);
+        nbt.putInt("DwellTicks", this.currentDwellTicks);
+        nbt.putInt("NextStation", this.nextStationIndex);
+        nbt.putDouble("FiredThrough", this.firedThroughArc);
+        nbt.putBoolean("ReverseAfterDwell", this.reverseAfterDwell);
+        nbt.putBoolean("ApproachBraking", this.approachBraking);
+        nbt.putDouble("EaseStartArc", this.easeStartArc);
+        nbt.putDouble("EaseStartSpeed", this.easeStartSpeed);
+        nbt.putBoolean("RingCommitted", this.ringCommitted);
+        nbt.putBoolean("Departing", this.departing);
+        nbt.putInt("DepartTimer", this.departTimer);
+        nbt.putInt("BufferHold", this.bufferHold);
+        nbt.putString("Line", this.currentLine);
+        nbt.putString("Direction", this.currentDirection);
+        nbt.putInt("LineColor", this.currentLineColor);
+        nbt.putString("Announcement", this.announcement);
+        return nbt;
     }
 
-    public boolean isFinished() {
-        for (MetroCarEntity car : this.cars) {
-            if (!car.isRemoved()) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    public void discard() {
-        for (MetroCarEntity car : this.cars) {
-            car.discard();
-        }
+    // Rebuilds a train from saved data on its baked path.
+    static Consist fromNbt(NbtCompound nbt, UUID id, MetroConfig config, RailPath path) {
+        Consist consist = new Consist(id, config, path, nbt.getDouble("HeadArc", 0.0), nbt.getInt("Cars", 1));
+        consist.lost = nbt.getBoolean("Lost", false);
+        consist.speed = nbt.getDouble("Speed", 0.0);
+        int phase = nbt.getInt("Phase", 0);
+        consist.phase = phase >= 0 && phase < Phase.values().length ? Phase.values()[phase] : Phase.RUNNING;
+        consist.dwellTimer = nbt.getInt("DwellTimer", 0);
+        consist.currentDwellTicks = nbt.getInt("DwellTicks", 0);
+        consist.nextStationIndex = nbt.getInt("NextStation", 0);
+        consist.firedThroughArc = nbt.getDouble("FiredThrough", consist.headArc);
+        consist.reverseAfterDwell = nbt.getBoolean("ReverseAfterDwell", false);
+        consist.approachBraking = nbt.getBoolean("ApproachBraking", false);
+        consist.easeStartArc = nbt.getDouble("EaseStartArc", 0.0);
+        consist.easeStartSpeed = nbt.getDouble("EaseStartSpeed", 0.0);
+        consist.ringCommitted = nbt.getBoolean("RingCommitted", false);
+        consist.departing = nbt.getBoolean("Departing", false);
+        consist.departTimer = nbt.getInt("DepartTimer", 0);
+        consist.bufferHold = nbt.getInt("BufferHold", 0);
+        consist.currentLine = nbt.getString("Line", "");
+        consist.currentDirection = nbt.getString("Direction", "");
+        consist.currentLineColor = nbt.getInt("LineColor", 0xFFF5A623);
+        consist.announcement = nbt.getString("Announcement", "");
+        return consist;
     }
 }

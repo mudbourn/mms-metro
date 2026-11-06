@@ -7,6 +7,7 @@ import info.mudbourn.mmsmetro.block.entity.JunctionBlockEntity;
 import info.mudbourn.mmsmetro.block.entity.SpeedBumpBlockEntity;
 import info.mudbourn.mmsmetro.block.entity.StationBlockEntity;
 import info.mudbourn.mmsmetro.path.RailPath;
+import info.mudbourn.mmsmetro.train.MetroState;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.entity.player.PlayerEntity;
@@ -280,6 +281,7 @@ public final class MetroNetworking {
             station.setHub(edit.hub());
             station.setTerminus(edit.terminus());
             station.setDwellTicks(Math.max(0, edit.dwell()));
+            MetroState.markPathsDirty(world, edit.pos());
         }
     }
 
@@ -292,6 +294,7 @@ public final class MetroNetworking {
             && world.getBlockEntity(edit.pos()) instanceof SpeedBumpBlockEntity bump) {
             bump.setDirection(edit.direction());
             bump.setStationKey(edit.stationKey());
+            MetroState.markPathsDirty(world, edit.pos());
         }
     }
 
@@ -306,6 +309,7 @@ public final class MetroNetworking {
             junction.setExit(Direction.SOUTH, edit.south());
             junction.setExit(Direction.EAST, edit.east());
             junction.setExit(Direction.WEST, edit.west());
+            MetroState.markPathsDirty(world, edit.pos());
         }
     }
 

@@ -65,12 +65,12 @@ public final class StationPeripheral implements IPeripheral {
         if (!(this.station.getWorld() instanceof ServerWorld world)) {
             return arrivals;
         }
-        for (Consist consist : ConsistManager.liveConsists(world)) {
+        for (Consist consist : ConsistManager.trains(world)) {
             for (Consist.Visit visit : consist.upcomingVisits(this.station.getPos(), VISITS_PER_TRAIN)) {
                 Map<String, Object> arrival = new HashMap<>();
                 arrival.put("line", consist.lineName());
                 arrival.put("direction", visit.direction());
-                arrival.put("cars", consist.cars().size());
+                arrival.put("cars", consist.carCount());
                 arrival.put("eta", Math.round(visit.ticks() / TICKS_PER_SECOND));
                 arrival.put("atPlatform", visit.atPlatform());
                 arrival.put("departsIn", visit.atPlatform()

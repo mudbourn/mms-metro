@@ -9,6 +9,7 @@ import info.mudbourn.mmsmetro.block.entity.StationBlockEntity;
 import info.mudbourn.mmsmetro.config.MetroConfig;
 import info.mudbourn.mmsmetro.train.Consist;
 import info.mudbourn.mmsmetro.train.ConsistManager;
+import info.mudbourn.mmsmetro.train.MetroState;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.command.CommandSource;
 import net.minecraft.server.command.CommandManager;
@@ -55,6 +56,17 @@ public final class MetroCommand {
                             ConsistManager.activeLineIds(ctx.getSource().getWorld()), builder))
                         .executes(context -> removeLine(context.getSource(),
                             StringArgumentType.getString(context, "line"))))))
+            .then(CommandManager.literal("rebake")
+                .executes(context -> rebake(context.getSource(), null))
+                .then(CommandManager.literal("all")
+                    .executes(context -> rebake(context.getSource(), null)))
+                .then(CommandManager.argument("line", StringArgumentType.word())
+                    .suggests((ctx, builder) -> CommandSource.suggestMatching(
+                        ConsistManager.activeLineIds(ctx.getSource().getWorld()), builder))
+                    .executes(context -> rebake(context.getSource(),
+                        StringArgumentType.getString(context, "line")))))
+            .then(CommandManager.literal("list")
+                .executes(context -> list(context.getSource())))
             .then(CommandManager.literal("config")
                 .executes(context -> showConfig(context.getSource()))
                 .then(CommandManager.argument("key", StringArgumentType.word())
@@ -169,6 +181,24 @@ public final class MetroCommand {
         return removed ? 1 : 0;
     }
 
+    private static int rebake(ServerCommandSource source, String line) {
+        int marked = ConsistManager.rebake(source.getWorld(), line);
+        source.sendFeedback(() -> Text.literal("Rebaked " + marked + " path(s)."), true);
+        return marked;
+    }
+
+    private static int list(ServerCommandSource source) {
+        java.util.List<String> lines = ConsistManager.describeTrains(source.getWorld());
+        if (lines.isEmpty()) {
+            source.sendFeedback(() -> Text.literal("No trains."), false);
+            return 0;
+        }
+        for (String line : lines) {
+            source.sendFeedback(() -> Text.literal(line), false);
+        }
+        return lines.size();
+    }
+
     private static int showConfig(ServerCommandSource source) {
         source.sendFeedback(() -> Text.literal("Metro config: " + MmsMetro.config().describe()), false);
         return 1;
@@ -192,6 +222,7 @@ public final class MetroCommand {
             return 0;
         }
         editor.accept(station);
+        MetroState.markPathsDirty(source.getWorld(), station.getPos());
         source.sendFeedback(() -> Text.literal("Updated station " + field + "."), false);
         return 1;
     }
