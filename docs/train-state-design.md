@@ -2,8 +2,8 @@
 
 A train is data, not entities. Its state lives in per-world saved data and
 advances every server tick whether or not its chunks are loaded. Car entities
-are views, spawned only where a player can see them. Trains add no chunk
-tickets.
+are views. Each train holds one small ticket on each chunk its cars occupy,
+so its views stay loaded.
 
 ## Today
 
@@ -66,10 +66,17 @@ train), the train stops and is reported in `/metro list`.
 
 ## Views
 
-Each tick, for each train, sample every car's arc. If the car's chunk is
-watched by a player and its entities are loaded, make sure a
-`MetroCarEntity` exists for it, then seat it as `applyCarPositions` does now.
-If the chunk is not, discard the view.
+Each tick, for each train, sample every car's arc. If the car's chunk has its
+entities loaded, make sure a `MetroCarEntity` exists for it, then seat it as
+`applyCarPositions` does now. If the chunk does not, discard the view.
+
+`TrainTickets` holds a radius-2 `TRAIN` ticket, which entity-ticks only the
+centre chunk, on every chunk a car occupies. A ticket stays 100 ticks after
+the last car leaves its chunk, so a train does not swap tickets at each
+border. Tickets are never serialized.
+
+A view without riders that changes chunk is replaced by a fresh entity. The
+replacement spawns first and the old view is discarded the next tick.
 
 - Views never save with the chunk (`shouldSave` false); the state is the only
   copy, so there is nothing stale to reconcile.
@@ -106,7 +113,7 @@ chunks nobody visits migrate the first time those chunks load.
 
 ## Removed
 
-- `ModTickets.TRAIN`, `updateForcedChunks` and `chunkRadius`.
+- `updateForcedChunks` and `chunkRadius`.
 - `reconcile`, `reconstruct`, `carsThisTick` and the periodic marker rescan.
 - Per-car persisted arc, yaw and path identity, once migration has run.
 

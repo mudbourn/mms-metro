@@ -591,7 +591,7 @@ public final class Consist {
                 car = null;
                 this.views[i] = null;
             }
-            boolean active = isWatched(BlockPos.ofFloored(point.pos()));
+            boolean active = this.world.isChunkLoaded(new net.minecraft.util.math.ChunkPos(BlockPos.ofFloored(point.pos())).toLong());
             if (!active && (car == null || !car.hasPlayerRider())) {
                 if (car != null) {
                     despawn(car);
@@ -630,11 +630,11 @@ public final class Consist {
         }
     }
 
-    // True when a player watches the chunk at pos and its entities are loaded.
-    private boolean isWatched(BlockPos pos) {
-        net.minecraft.util.math.ChunkPos chunk = new net.minecraft.util.math.ChunkPos(pos);
-        return this.world.isChunkLoaded(chunk.toLong())
-            && !this.world.getChunkManager().chunkLoadingManager.getPlayersWatchingChunk(chunk, false).isEmpty();
+    // Adds the chunk of every car to the set.
+    void collectCarChunks(it.unimi.dsi.fastutil.longs.LongSet out) {
+        for (int i = 0; i < this.carCount; i++) {
+            out.add(new net.minecraft.util.math.ChunkPos(BlockPos.ofFloored(this.path.sample(carArc(i)).pos())).toLong());
+        }
     }
 
     private MetroCarEntity spawnView(int index, PathPoint point) {

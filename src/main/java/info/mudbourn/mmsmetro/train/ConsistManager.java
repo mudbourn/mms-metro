@@ -51,7 +51,10 @@ public final class ConsistManager {
         AttackEntityCallback.EVENT.register(ConsistManager::onAttack);
         ServerEntityEvents.ENTITY_LOAD.register(LegacyCars::onLoad);
         ServerLifecycleEvents.SERVER_STOPPING.register(ConsistManager::despawnAllViews);
-        ServerLifecycleEvents.SERVER_STOPPED.register(server -> LegacyCars.clear());
+        ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+            LegacyCars.clear();
+            TrainTickets.clear();
+        });
     }
 
     // Left-clicking a car with the spawner removes its whole train, swing cancelled.
@@ -426,6 +429,7 @@ public final class ConsistManager {
             return;
         }
         LegacyCars.migrate(world, state);
+        TrainTickets.update(world, state.trains());
         if (state.trains().isEmpty() && state.waves().isEmpty()) {
             return;
         }
