@@ -148,6 +148,11 @@ public class MetroCarEntity extends Entity {
                 }
             }
         }
+        if (this.age == 0) {
+            this.prevPathYaw = this.getPathYaw();
+            this.prevPathPitch = this.getPathPitch();
+            this.lastClientArc = this.getArcLength();
+        }
     }
 
     public String getHudLine() {

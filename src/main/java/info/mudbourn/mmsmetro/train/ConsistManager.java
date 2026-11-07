@@ -47,7 +47,7 @@ public final class ConsistManager {
     }
 
     public static void init() {
-        ServerTickEvents.START_WORLD_TICK.register(ConsistManager::tickWorld);
+        ServerTickEvents.END_WORLD_TICK.register(ConsistManager::tickWorld);
         AttackEntityCallback.EVENT.register(ConsistManager::onAttack);
         ServerEntityEvents.ENTITY_LOAD.register(LegacyCars::onLoad);
         ServerLifecycleEvents.SERVER_STOPPING.register(ConsistManager::despawnAllViews);

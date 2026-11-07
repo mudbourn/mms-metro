@@ -32,7 +32,7 @@ tickets.
 
 `Consist` keeps its motion logic but reads and writes this record instead of
 fields mirrored onto cars. `ConsistManager.tickWorld` ticks every train in the
-state on `START_WORLD_TICK`, on the main thread. `START_WORLD_TICK` fires for every
+state on `END_WORLD_TICK`, on the main thread. `END_WORLD_TICK` fires for every
 world each server tick, even with no players, so schedules keep time.
 
 ## Baking
