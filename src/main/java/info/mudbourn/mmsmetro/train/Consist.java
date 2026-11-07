@@ -238,10 +238,21 @@ public final class Consist {
     }
 
     // One summary line for the list command.
+    private int liveViews() {
+        int live = 0;
+        for (MetroCarEntity car : this.views) {
+            if (car != null && !car.isRemoved()) {
+                live++;
+            }
+        }
+        return live;
+    }
+
     String describe() {
         return this.id.toString().substring(0, 8)
             + " line=" + (this.currentLine.isEmpty() ? "-" : this.currentLine)
-            + " cars=" + this.carCount
+            + " cars=" + liveViews() + "/" + this.carCount
+            + " at " + BlockPos.ofFloored(this.path.sample(this.headArc).pos()).toShortString()
             + " " + this.phase.name().toLowerCase()
             + " arc=" + Math.round(this.headArc) + "/" + Math.round(this.path.length())
             + (this.lost ? " LOST (track removed under the train)" : "");
@@ -575,13 +586,19 @@ public final class Consist {
                 car = null;
                 this.views[i] = null;
             }
-            boolean active = this.world.shouldTickEntityAt(BlockPos.ofFloored(point.pos()));
+            boolean active = isWatched(BlockPos.ofFloored(point.pos()));
             if (!active && (car == null || !car.hasPlayerRider())) {
                 if (car != null) {
                     despawn(car);
                     this.views[i] = null;
                 }
                 continue;
+            }
+            if (car != null && !car.hasPassengers()
+                && car.getChunkPos().toLong() != new net.minecraft.util.math.ChunkPos(BlockPos.ofFloored(point.pos())).toLong()) {
+                car.discard();
+                car = null;
+                this.views[i] = null;
             }
             if (car == null) {
                 car = spawnView(i, point);
@@ -603,6 +620,13 @@ public final class Consist {
                 car.updatePassengerPosition(passenger);
             }
         }
+    }
+
+    // True when a player watches the chunk at pos and its entities are loaded.
+    private boolean isWatched(BlockPos pos) {
+        net.minecraft.util.math.ChunkPos chunk = new net.minecraft.util.math.ChunkPos(pos);
+        return this.world.isChunkLoaded(chunk.toLong())
+            && !this.world.getChunkManager().chunkLoadingManager.getPlayersWatchingChunk(chunk, false).isEmpty();
     }
 
     private MetroCarEntity spawnView(int index, PathPoint point) {

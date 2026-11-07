@@ -32,7 +32,7 @@ tickets.
 
 `Consist` keeps its motion logic but reads and writes this record instead of
 fields mirrored onto cars. `ConsistManager.tickWorld` ticks every train in the
-state on `END_WORLD_TICK`, on the main thread. `END_WORLD_TICK` fires for every
+state on `START_WORLD_TICK`, on the main thread. `START_WORLD_TICK` fires for every
 world each server tick, even with no players, so schedules keep time.
 
 ## Baking
@@ -67,7 +67,7 @@ train), the train stops and is reported in `/metro list`.
 ## Views
 
 Each tick, for each train, sample every car's arc. If the car's chunk is
-loaded and entity-ticking (`world.shouldTickEntityAt`), make sure a
+watched by a player and its entities are loaded, make sure a
 `MetroCarEntity` exists for it, then seat it as `applyCarPositions` does now.
 If the chunk is not, discard the view.
 
