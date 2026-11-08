@@ -65,9 +65,6 @@ public final class Consist {
 
     private MetroCarEntity[] views;
 
-    // Views replaced after a chunk change, discarded once their replacements have been sent.
-    private final List<MetroCarEntity> retiring = new ArrayList<>();
-
     private boolean lost;
 
     private double firedThroughArc;
@@ -577,8 +574,6 @@ public final class Consist {
 
     // Makes each car entity exist exactly where its chunk is loaded and entity-ticking, and seats it on the path.
     public void syncViews() {
-        List<MetroCarEntity> retired = new ArrayList<>(this.retiring);
-        this.retiring.clear();
         PathStation next = nextStation();
         String nextName = next != null ? next.name() : "";
         boolean waiting = this.phase == Phase.DWELLING;
@@ -591,19 +586,13 @@ public final class Consist {
                 car = null;
                 this.views[i] = null;
             }
-            boolean active = this.world.isChunkLoaded(new net.minecraft.util.math.ChunkPos(BlockPos.ofFloored(point.pos())).toLong());
+            boolean active = this.world.shouldTickEntityAt(BlockPos.ofFloored(point.pos()));
             if (!active && (car == null || !car.hasPlayerRider())) {
                 if (car != null) {
                     despawn(car);
                     this.views[i] = null;
                 }
                 continue;
-            }
-            if (car != null && !car.hasPassengers()
-                && car.getChunkPos().toLong() != new net.minecraft.util.math.ChunkPos(BlockPos.ofFloored(point.pos())).toLong()) {
-                this.retiring.add(car);
-                car = null;
-                this.views[i] = null;
             }
             if (car == null) {
                 car = spawnView(i, point);
@@ -624,9 +613,6 @@ public final class Consist {
             for (Entity passenger : car.getPassengerList()) {
                 car.updatePassengerPosition(passenger);
             }
-        }
-        for (MetroCarEntity car : retired) {
-            car.discard();
         }
     }
 
@@ -668,7 +654,6 @@ public final class Consist {
                 this.views[i] = null;
             }
         }
-        discardRetiring();
     }
 
     // Dismounts non-player riders from every view, keeping the views.
@@ -688,14 +673,6 @@ public final class Consist {
                 this.views[i] = null;
             }
         }
-        discardRetiring();
-    }
-
-    private void discardRetiring() {
-        for (MetroCarEntity car : this.retiring) {
-            car.discard();
-        }
-        this.retiring.clear();
     }
 
     // Fires the arrival announcement for every bump the head advanced across this tick.
@@ -742,7 +719,7 @@ public final class Consist {
     // Turns the train around onto the baked path leading back from its turn-around point, flipping the car order so the old tail leads.
     private boolean reverse(boolean keepDirection) {
         PathReverse turn = this.path.reverseAt(this.headArc);
-        RailPath next = turn == null ? null : this.state.pathLoaded(turn.key());
+        RailPath next = turn == null ? null : this.state.pathFor(turn.key());
         if (next == null) {
             this.speed = 0.0;
             return false;

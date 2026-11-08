@@ -49,8 +49,9 @@ looks up in the world:
 
 Baking runs `RailPath.build` as now, at spawn, at circulate and on
 `/metro rebake [line|all]`. These may load chunks while they walk; that cost
-is paid once, not per tick. Bakes that start during a tick (dirty rebakes,
-a missing reverse or wave path) never load chunks: a walk that reaches an
+is paid once, not per tick. A terminus turn-around whose reverse path is
+missing bakes it the same way, once. Other bakes that start during a tick
+(dirty rebakes, a wave path) never load chunks: a walk that reaches an
 unloaded chunk keeps the old path and retries later.
 
 Each baked path keeps the set of chunks it runs through. A mixin on
@@ -66,8 +67,8 @@ train), the train stops and is reported in `/metro list`.
 
 ## Views
 
-Each tick, for each train, sample every car's arc. If the car's chunk has its
-entities loaded, make sure a `MetroCarEntity` exists for it, then seat it as
+Each tick, for each train, sample every car's arc. If the car's chunk ticks
+entities (`shouldTickEntityAt`), make sure a `MetroCarEntity` exists for it, then seat it as
 `applyCarPositions` does now. If the chunk does not, discard the view.
 
 `TrainTickets` holds a radius-2 `TRAIN` ticket, which entity-ticks only the
@@ -75,8 +76,8 @@ centre chunk, on every chunk a car occupies. A ticket stays 100 ticks after
 the last car leaves its chunk, so a train does not swap tickets at each
 border. Tickets are never serialized.
 
-A view without riders that changes chunk is replaced by a fresh entity. The
-replacement spawns first and the old view is discarded the next tick.
+A view keeps the same entity when it crosses a chunk border, so the client
+interpolates it smoothly and sounds attached to it keep playing.
 
 - Views never save with the chunk (`shouldSave` false); the state is the only
   copy, so there is nothing stale to reconcile.
