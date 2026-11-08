@@ -63,6 +63,10 @@ public class MetroCarEntity extends Entity {
     private static final TrackedData<Boolean> HUD_ARRIVING =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
 
+    // Cars in the whole train, synced so the client can tell when some are missing.
+    private static final TrackedData<Integer> CAR_COUNT =
+        DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.INTEGER);
+
     // The train id as a string, synced so the client can group a train's cars.
     private static final TrackedData<String> CONSIST_ID =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.STRING);
@@ -109,6 +113,7 @@ public class MetroCarEntity extends Entity {
     protected void initDataTracker(DataTracker.Builder builder) {
         builder.add(ARC_LENGTH, 0.0f);
         builder.add(CAR_INDEX, 0);
+        builder.add(CAR_COUNT, 0);
         builder.add(PATH_YAW, 0.0f);
         builder.add(PATH_PITCH, 0.0f);
         builder.add(HUD_LINE, "");
@@ -292,6 +297,16 @@ public class MetroCarEntity extends Entity {
 
     public void setCarIndex(int value) {
         this.dataTracker.set(CAR_INDEX, value);
+    }
+
+    public int getCarCount() {
+        return this.dataTracker.get(CAR_COUNT);
+    }
+
+    public void setCarCount(int value) {
+        if (this.dataTracker.get(CAR_COUNT) != value) {
+            this.dataTracker.set(CAR_COUNT, value);
+        }
     }
 
     public BlockPos getPathOrigin() {

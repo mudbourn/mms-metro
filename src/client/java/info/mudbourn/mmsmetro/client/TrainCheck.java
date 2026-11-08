@@ -21,9 +21,6 @@ public final class TrainCheck {
     // Client ticks between checks.
     private static final int INTERVAL = 10;
 
-    // Client ticks before the same train may be reported again.
-    private static final long REPORT_COOLDOWN = 100;
-
     // Blocks two neighbouring cars may sit further apart than their arc gap.
     private static final double SPREAD_SLACK = 2.0;
 
@@ -31,8 +28,6 @@ public final class TrainCheck {
     private static final float STILL_ARC = 0.001f;
 
     private static final Int2FloatMap LAST_ARC = new Int2FloatOpenHashMap();
-
-    private static final Map<UUID, Long> LAST_REPORT = new HashMap<>();
 
     private static long ticks;
 
@@ -42,7 +37,6 @@ public final class TrainCheck {
     public static void tick(MinecraftClient client) {
         if (client.world == null || client.player == null) {
             LAST_ARC.clear();
-            LAST_REPORT.clear();
             return;
         }
         if (++ticks % INTERVAL != 0) {
@@ -59,7 +53,7 @@ public final class TrainCheck {
         }
         Int2FloatMap seen = new Int2FloatOpenHashMap();
         for (Map.Entry<UUID, List<MetroCarEntity>> train : trains.entrySet()) {
-            if (broken(train.getValue(), seen) && canReport(train.getKey())) {
+            if (broken(train.getValue(), seen)) {
                 ClientPlayNetworking.send(new MetroNetworking.RedrawTrain(train.getKey()));
             }
         }
@@ -67,16 +61,7 @@ public final class TrainCheck {
         LAST_ARC.putAll(seen);
     }
 
-    private static boolean canReport(UUID id) {
-        Long last = LAST_REPORT.get(id);
-        if (last != null && ticks - last < REPORT_COOLDOWN) {
-            return false;
-        }
-        LAST_REPORT.put(id, ticks);
-        return true;
-    }
-
-    // True when the visible cars of one train are doubled, have a gap, sit too far apart, or some move while others are frozen.
+    // True when the visible cars of one train are fewer than the train has, doubled, gapped, too far apart, or partly frozen.
     private static boolean broken(List<MetroCarEntity> cars, Int2FloatMap seen) {
         cars.sort(Comparator.comparingInt(MetroCarEntity::getCarIndex));
         boolean anyMoved = false;
@@ -102,6 +87,6 @@ public final class TrainCheck {
                 return true;
             }
         }
-        return anyMoved && anyStill;
+        return anyMoved && anyStill || cars.size() < cars.get(0).getCarCount();
     }
 }

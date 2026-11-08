@@ -19,6 +19,7 @@ import net.minecraft.sound.SoundEvent;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.util.DyeColor;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.Vec3d;
 
 import java.util.ArrayList;
@@ -66,8 +67,6 @@ public final class Consist {
     private MetroCarEntity[] views;
 
     private boolean lost;
-
-    private long lastRedrawTick = -REDRAW_COOLDOWN;
 
     private double firedThroughArc;
 
@@ -574,7 +573,7 @@ public final class Consist {
         return Math.max(0.0, arc);
     }
 
-    // Makes each car entity exist exactly where its chunk is loaded and entity-ticking, and seats it on the path.
+    // Makes each car entity exist exactly where its chunk has entities loaded, and seats it on the path.
     public void syncViews() {
         PathStation next = nextStation();
         String nextName = next != null ? next.name() : "";
@@ -588,7 +587,7 @@ public final class Consist {
                 car = null;
                 this.views[i] = null;
             }
-            boolean active = this.world.shouldTickEntityAt(BlockPos.ofFloored(point.pos()));
+            boolean active = this.world.isChunkLoaded(ChunkPos.toLong(BlockPos.ofFloored(point.pos())));
             if (!active && (car == null || !car.hasPlayerRider())) {
                 if (car != null) {
                     despawn(car);
@@ -610,6 +609,7 @@ public final class Consist {
             car.setPathPitch(point.pitch());
             car.setTrackedPos(point.pos().x, point.pos().y, point.pos().z);
             car.setArcLength((float) arc);
+            car.setCarCount(this.carCount);
             car.setHudInfo(this.currentLine, this.currentDirection, nextName, waiting, this.currentLineColor, arriving);
             car.setHudAnnouncement(this.announcement);
             for (Entity passenger : car.getPassengerList()) {
@@ -658,16 +658,21 @@ public final class Consist {
         }
     }
 
-    // Ticks between redraws one train accepts.
-    private static final long REDRAW_COOLDOWN = 100;
-
-    // Drops every view without a player rider so the next sync respawns it, at most once per cooldown.
-    boolean redraw() {
-        long now = this.world.getTime();
-        if (now - this.lastRedrawTick < REDRAW_COOLDOWN) {
-            return false;
+    // True when every car sits in a chunk within the given chunk distance of a position.
+    boolean allCarsWithinChunks(Vec3d point, int chunks) {
+        int px = BlockPos.ofFloored(point).getX() >> 4;
+        int pz = BlockPos.ofFloored(point).getZ() >> 4;
+        for (int i = 0; i < this.carCount; i++) {
+            BlockPos car = BlockPos.ofFloored(this.path.sample(carArc(i)).pos());
+            if (Math.max(Math.abs((car.getX() >> 4) - px), Math.abs((car.getZ() >> 4) - pz)) > chunks) {
+                return false;
+            }
         }
-        this.lastRedrawTick = now;
+        return true;
+    }
+
+    // Drops every view without a player rider so the next sync respawns it.
+    void redraw() {
         for (int i = 0; i < this.views.length; i++) {
             MetroCarEntity car = this.views[i];
             if (car != null && !car.hasPlayerRider()) {
@@ -675,7 +680,6 @@ public final class Consist {
                 this.views[i] = null;
             }
         }
-        return true;
     }
 
     // Dismounts non-player riders from every view, keeping the views.

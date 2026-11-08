@@ -67,8 +67,8 @@ train), the train stops and is reported in `/metro list`.
 
 ## Views
 
-Each tick, for each train, sample every car's arc. If the car's chunk ticks
-entities (`shouldTickEntityAt`), make sure a `MetroCarEntity` exists for it, then seat it as
+Each tick, for each train, sample every car's arc. If the car's chunk has its
+entities loaded (`isChunkLoaded`), even outside simulation distance, make sure a `MetroCarEntity` exists for it, then seat it as
 `applyCarPositions` does now. If the chunk does not, discard the view.
 
 `TrainTickets` holds a radius-2 `TRAIN` ticket, which entity-ticks only the
