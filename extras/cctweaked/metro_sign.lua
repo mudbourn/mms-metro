@@ -11,7 +11,7 @@ local CONFIG = {
   exitSide = "Left",
   terminus = false,
   textScale = 1,
-  etaPadding = 1.5,
+  etaPadding = 1.1,
   etaStepSeconds = 15,
   refreshSeconds = 1,
   frameSeconds = 0.25,
@@ -121,13 +121,13 @@ local function clock(seconds)
   return string.format("%d:%02d", math.floor(seconds / 60), seconds % 60)
 end
 
--- Upper-bound ETA in seconds, padded since the raw ETA assumes top speed, rounded up to the step
+-- Upper-bound ETA in seconds, padded for holds behind other trains, rounded up to the step
 local function upperSeconds(seconds)
   local step = CONFIG.etaStepSeconds
   return math.max(step, math.ceil(seconds * CONFIG.etaPadding / step) * step)
 end
 
--- Live station settings and arrivals, or CONFIG and no arrivals without a station
+-- Live station settings and arrivals, or CONFIG and no arrivals without a station; arrivals are nil when the read failed
 local function readStation(station)
   if not station then
     return CONFIG, nil
@@ -146,7 +146,7 @@ local function readStation(station)
     transferLine = info.hub and info.transferLine or "",
     exitSide = info.exitSide,
     terminus = info.terminus,
-  }, okArr and arrivals or {}
+  }, okArr and arrivals or nil
 end
 
 -- Status text and colour for one arrival
@@ -159,7 +159,7 @@ end
 
 -- Draw up to max arrivals from row y, stopping before row last
 local function drawArrivals(mon, y, last, arrivals, blink, compact)
-  if #arrivals == 0 then
+  if not arrivals or #arrivals == 0 then
     if y <= last then
       row(mon, y, "No trains due", "", colors.gray)
     end
@@ -300,7 +300,11 @@ local function runLocal(channel)
   local timer = os.startTimer(CONFIG.frameSeconds)
   while true do
     if os.clock() - lastRead >= CONFIG.refreshSeconds then
-      info, arrivals = readStation(station)
+      local fresh
+      info, fresh = readStation(station)
+      if fresh or not station then
+        arrivals = fresh
+      end
       lastRead = os.clock()
       if channel then
         rednet.broadcast({ channel = channel, info = info, arrivals = arrivals }, PROTOCOL)

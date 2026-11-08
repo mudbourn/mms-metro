@@ -8,6 +8,7 @@ import info.mudbourn.mmsmetro.block.SpeedBumpBlock;
 import info.mudbourn.mmsmetro.block.StationBlock;
 import info.mudbourn.mmsmetro.path.PathKey;
 import info.mudbourn.mmsmetro.path.PathReverse;
+import info.mudbourn.mmsmetro.path.PathStation;
 import info.mudbourn.mmsmetro.path.RailPath;
 import net.minecraft.block.AbstractRailBlock;
 import net.minecraft.block.Block;
@@ -138,6 +139,11 @@ public final class MetroState extends PersistentState {
         return existing != null ? existing : bakeChain(key, false);
     }
 
+    // The baked path for a key if one is already held, never baking.
+    RailPath bakedPath(PathKey key) {
+        return this.paths.get(key);
+    }
+
     // Like pathFor, but never loads a chunk; null when the path is absent and cannot be baked from loaded chunks.
     RailPath pathLoaded(PathKey key) {
         RailPath existing = this.paths.get(key);
@@ -265,12 +271,13 @@ public final class MetroState extends PersistentState {
         }
         if (fresh.length() <= 0.0) {
             for (Consist train : this.trains.values()) {
-                if (train.path() == old) {
+                if (train.path().key().equals(key)) {
                     train.markLost();
                 }
             }
             return;
         }
+        warnIfRerouted(old, fresh);
         this.paths.put(key, fresh);
         for (PathReverse reverse : fresh.reverses()) {
             if (loadedOnly) {
@@ -280,9 +287,31 @@ public final class MetroState extends PersistentState {
             }
         }
         for (Consist train : this.trains.values()) {
-            if (train.path() == old) {
-                train.rebased(old, fresh);
+            if (train.path().key().equals(key)) {
+                train.rebased(train.path(), fresh);
             }
+        }
+    }
+
+    // Logs the stops a rebaked path gained or lost, since a changed rail shape can send its trains another way.
+    private static void warnIfRerouted(RailPath old, RailPath fresh) {
+        Set<BlockPos> before = new LinkedHashSet<>();
+        for (PathStation station : old.stations()) {
+            before.add(station.pos());
+        }
+        Set<BlockPos> after = new LinkedHashSet<>();
+        for (PathStation station : fresh.stations()) {
+            after.add(station.pos());
+        }
+        Set<BlockPos> lost = new LinkedHashSet<>(before);
+        lost.removeAll(after);
+        Set<BlockPos> gained = new LinkedHashSet<>(after);
+        gained.removeAll(before);
+        if (!lost.isEmpty() || !gained.isEmpty()) {
+            MmsMetro.LOGGER.warn("Path from {} changed stops on rebake: lost {}, gained {}",
+                fresh.key().origin().toShortString(),
+                lost,
+                gained);
         }
     }
 

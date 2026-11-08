@@ -58,7 +58,7 @@ public final class StationPeripheral implements IPeripheral {
     // Most predicted calls listed per train, so one train can fill several rows of a board.
     private static final int VISITS_PER_TRAIN = 4;
 
-    // Calls at this stop, soonest first, each train repeated for its later laps or return trips, with a rough ETA in seconds at top speed.
+    // Calls at this stop, soonest first, each train repeated for its later laps or return trips, with an ETA in seconds that counts acceleration, braking and dwells.
     @LuaFunction(mainThread = true)
     public List<Map<String, Object>> getArrivals() {
         List<Map<String, Object>> arrivals = new ArrayList<>();

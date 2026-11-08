@@ -763,7 +763,7 @@ public final class Consist {
         }
 
         this.path = next;
-        this.headArc = Math.min((this.carCount - 1) * this.config.carSpacing, next.length());
+        this.headArc = turnStartArc(next);
         this.speed = 0.0;
         this.phase = Phase.RUNNING;
         this.approachBraking = false;
@@ -803,14 +803,15 @@ public final class Consist {
     public record Visit(double ticks, String direction, boolean atPlatform) {
     }
 
-    // Predicts the next calls at a station block by walking the route at top speed, counting dwells, loop laps and turn-arounds.
+    // Predicts the next calls at a station block by walking the route, timing each run from stop to stop with acceleration and braking, and counting dwells, loop laps and turn-arounds onto baked reverse paths.
     public List<Visit> upcomingVisits(BlockPos stationPos, int max) {
         List<Visit> visits = new ArrayList<>();
-        double speed = Math.max(1.0e-3, this.config.maxSpeed);
-        double len = this.path.length();
+        RailPath walk = this.path;
         double x = this.headArc;
         int dir = 1;
         double ticks = 0.0;
+        double run = 0.0;
+        double startSpeed = this.speed;
         String label = this.currentDirection;
         PathStation here = nextStation();
         if (this.phase == Phase.DWELLING && here != null) {
@@ -818,35 +819,53 @@ public final class Consist {
                 visits.add(new Visit(0.0, label, true));
             }
             ticks = ticksUntilDeparture();
+            startSpeed = 0.0;
             if (!here.direction().isEmpty()) {
                 label = here.direction();
             }
             x = here.arc();
             if (here.terminus()) {
-                dir = -1;
+                RailPath turned = turnedPath(walk, x);
+                if (turned != null) {
+                    walk = turned;
+                    x = turnStartArc(turned);
+                } else {
+                    dir = -1;
+                }
             }
         }
         for (int step = 0; step < VISIT_SEARCH_STOPS && visits.size() < max; step++) {
-            PathStation stop = nextStopFrom(x, dir);
+            double len = walk.length();
+            PathStation stop = nextStopFrom(walk, x, dir);
             if (stop == null) {
-                if (this.path.isLoop() && dir > 0) {
-                    ticks += (len - x) / speed;
-                    x = this.path.loopStartArc() - 1.0e-3;
-                    if (nextStopFrom(x, dir) == null) {
+                if (walk.isLoop() && dir > 0) {
+                    run += len - x;
+                    x = walk.loopStartArc() - 1.0e-3;
+                    if (nextStopFrom(walk, x, dir) == null) {
                         break;
                     }
                     continue;
                 }
                 double end = dir > 0 ? len : 0.0;
-                ticks += Math.abs(end - x) / speed;
-                x = end;
-                dir = -dir;
-                if (nextStopFrom(x, dir) == null) {
+                ticks += runTicks(run + Math.abs(end - x), startSpeed);
+                run = 0.0;
+                startSpeed = 0.0;
+                RailPath turned = dir > 0 ? turnedPath(walk, end) : null;
+                if (turned != null) {
+                    walk = turned;
+                    x = turnStartArc(turned);
+                } else {
+                    x = end;
+                    dir = -dir;
+                }
+                if (nextStopFrom(walk, x, dir) == null) {
                     break;
                 }
                 continue;
             }
-            ticks += Math.abs(stop.arc() - x) / speed;
+            ticks += runTicks(run + Math.abs(stop.arc() - x), startSpeed);
+            run = 0.0;
+            startSpeed = 0.0;
             x = stop.arc();
             if (stop.pos().equals(stationPos)) {
                 visits.add(new Visit(ticks, label, false));
@@ -856,16 +875,50 @@ public final class Consist {
                 label = stop.direction();
             }
             if (stop.terminus()) {
-                dir = -dir;
+                RailPath turned = dir > 0 ? turnedPath(walk, x) : null;
+                if (turned != null) {
+                    walk = turned;
+                    x = turnStartArc(turned);
+                } else {
+                    dir = -dir;
+                }
             }
         }
         return visits;
     }
 
+    // Ticks to cover a distance from a starting speed and stop at its end, accelerating to top speed and braking at the configured rate.
+    private double runTicks(double distance, double fromSpeed) {
+        double accel = Math.max(1.0e-4, this.config.acceleration);
+        double top = Math.max(1.0e-3, this.config.maxSpeed);
+        double v0 = Math.min(fromSpeed, top);
+        double speedUp = (top * top - v0 * v0) / (2.0 * accel);
+        double slowDown = top * top / (2.0 * accel);
+        if (distance >= speedUp + slowDown) {
+            return (top - v0) / accel + top / accel + (distance - speedUp - slowDown) / top;
+        }
+        double peak = Math.sqrt((2.0 * accel * distance + v0 * v0) / 2.0);
+        if (peak <= v0) {
+            return v0 > 0.0 ? 2.0 * distance / v0 : 0.0;
+        }
+        return (peak - v0) / accel + peak / accel;
+    }
+
+    // The already-baked path a train turning around at an arc continues on, or null when none is held.
+    private RailPath turnedPath(RailPath from, double arc) {
+        PathReverse turn = from.reverseAt(arc);
+        return turn == null || this.state == null ? null : this.state.bakedPath(turn.key());
+    }
+
+    // Head arc a train starts from after turning onto a path, matching reverse().
+    private double turnStartArc(RailPath next) {
+        return Math.min((this.carCount - 1) * this.config.carSpacing, next.length());
+    }
+
     // Nearest station strictly beyond an arc in a travel direction, or null when none lies that way.
-    private PathStation nextStopFrom(double x, int dir) {
+    private static PathStation nextStopFrom(RailPath walk, double x, int dir) {
         PathStation best = null;
-        for (PathStation station : this.path.stations()) {
+        for (PathStation station : walk.stations()) {
             boolean ahead = dir > 0 ? station.arc() > x + 1.0e-3 : station.arc() < x - 1.0e-3;
             if (ahead && (best == null || Math.abs(station.arc() - x) < Math.abs(best.arc() - x))) {
                 best = station;

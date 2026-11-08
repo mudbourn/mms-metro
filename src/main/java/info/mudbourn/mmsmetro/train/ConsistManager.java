@@ -304,8 +304,7 @@ public final class ConsistManager {
                 continue;
             }
             Wave next = pending.remaining().get(0);
-            if (trigger.headArc() + 1.0e-3 >= pending.triggerArc()
-                && state.pathLoaded(new PathKey(next.origin(), next.dir())) != null) {
+            if (trigger.headArc() + 1.0e-3 >= pending.triggerArc()) {
                 it.remove();
                 Launch launched = spawnWave(state, next, pending.cars(), MmsMetro.config());
                 if (launched.terminal() != null && pending.remaining().size() > 1) {
