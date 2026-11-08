@@ -423,6 +423,17 @@ public final class ConsistManager {
         }
     }
 
+    // Redraws a train a nearby player reports as broken; false when unknown, too far or cooling down.
+    public static boolean redraw(ServerWorld world, UUID id, Vec3d playerPos) {
+        MetroState state = MetroState.peek(world);
+        Consist train = state == null ? null : state.train(id);
+        if (train == null) {
+            return false;
+        }
+        double reach = world.getServer().getPlayerManager().getSimulationDistance() * 16.0 + 32.0;
+        return train.nearestCarSq(playerPos) <= reach * reach && train.redraw();
+    }
+
     private static void tickWorld(ServerWorld world) {
         MetroState state = LegacyCars.hasPending(world) ? MetroState.of(world) : MetroState.peek(world);
         if (state == null) {

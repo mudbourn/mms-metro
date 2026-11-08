@@ -27,6 +27,9 @@ public class MmsMetroClient implements ClientModInitializer {
         // Exempts metro cars from EntityCulling as soon as that mod's instance exists, so a rider never has to edit its config.
         ClientTickEvents.END_CLIENT_TICK.register(client -> EntityCullingCompat.tryRegister());
 
+        // Reports trains near the player whose cars look broken so the server redraws them.
+        ClientTickEvents.END_CLIENT_TICK.register(TrainCheck::tick);
+
         // Editor packets arrive off-thread; open the screen on the client thread.
         ClientPlayNetworking.registerGlobalReceiver(MetroNetworking.OpenStationScreen.ID,
             (payload, context) -> context.client().execute(() ->

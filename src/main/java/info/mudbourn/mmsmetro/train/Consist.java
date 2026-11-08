@@ -67,6 +67,8 @@ public final class Consist {
 
     private boolean lost;
 
+    private long lastRedrawTick = -REDRAW_COOLDOWN;
+
     private double firedThroughArc;
 
     private double headArc;
@@ -654,6 +656,26 @@ public final class Consist {
                 this.views[i] = null;
             }
         }
+    }
+
+    // Ticks between redraws one train accepts.
+    private static final long REDRAW_COOLDOWN = 100;
+
+    // Drops every view without a player rider so the next sync respawns it, at most once per cooldown.
+    boolean redraw() {
+        long now = this.world.getTime();
+        if (now - this.lastRedrawTick < REDRAW_COOLDOWN) {
+            return false;
+        }
+        this.lastRedrawTick = now;
+        for (int i = 0; i < this.views.length; i++) {
+            MetroCarEntity car = this.views[i];
+            if (car != null && !car.hasPlayerRider()) {
+                despawn(car);
+                this.views[i] = null;
+            }
+        }
+        return true;
     }
 
     // Dismounts non-player riders from every view, keeping the views.

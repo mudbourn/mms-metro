@@ -7,6 +7,7 @@ import info.mudbourn.mmsmetro.block.entity.JunctionBlockEntity;
 import info.mudbourn.mmsmetro.block.entity.SpeedBumpBlockEntity;
 import info.mudbourn.mmsmetro.block.entity.StationBlockEntity;
 import info.mudbourn.mmsmetro.path.RailPath;
+import info.mudbourn.mmsmetro.train.ConsistManager;
 import info.mudbourn.mmsmetro.train.MetroState;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
@@ -185,6 +186,20 @@ public final class MetroNetworking {
         }
     }
 
+    // Client->server: a train near the player looks broken and should respawn its cars.
+    public record RedrawTrain(java.util.UUID consistId) implements CustomPayload {
+        public static final Id<RedrawTrain> ID =
+            new Id<>(Identifier.of(MmsMetro.MOD_ID, "redraw_train"));
+        public static final PacketCodec<RegistryByteBuf, RedrawTrain> CODEC = PacketCodec.of(
+            (v, buf) -> buf.writeUuid(v.consistId),
+            buf -> new RedrawTrain(buf.readUuid()));
+
+        @Override
+        public Id<? extends CustomPayload> getId() {
+            return ID;
+        }
+    }
+
     // Registers every payload type (both sides must agree) and the server-side receivers that apply edits; called from the common initializer.
     public static void register() {
         PayloadTypeRegistry.playS2C().register(OpenStationScreen.ID, OpenStationScreen.CODEC);
@@ -193,6 +208,7 @@ public final class MetroNetworking {
         PayloadTypeRegistry.playC2S().register(BumpEdit.ID, BumpEdit.CODEC);
         PayloadTypeRegistry.playS2C().register(OpenJunctionScreen.ID, OpenJunctionScreen.CODEC);
         PayloadTypeRegistry.playC2S().register(JunctionEdit.ID, JunctionEdit.CODEC);
+        PayloadTypeRegistry.playC2S().register(RedrawTrain.ID, RedrawTrain.CODEC);
 
         ServerPlayNetworking.registerGlobalReceiver(StationEdit.ID, (payload, context) -> {
             ServerPlayerEntity player = context.player();
@@ -205,6 +221,11 @@ public final class MetroNetworking {
         ServerPlayNetworking.registerGlobalReceiver(JunctionEdit.ID, (payload, context) -> {
             ServerPlayerEntity player = context.player();
             player.getEntityWorld().getServer().execute(() -> applyJunction(player, payload));
+        });
+        ServerPlayNetworking.registerGlobalReceiver(RedrawTrain.ID, (payload, context) -> {
+            ServerPlayerEntity player = context.player();
+            player.getEntityWorld().getServer().execute(() ->
+                ConsistManager.redraw(player.getEntityWorld(), payload.consistId(), player.getEntityPos()));
         });
     }
 
