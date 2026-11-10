@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Deque;
 import java.util.HashSet;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -56,6 +57,8 @@ public final class MetroState extends PersistentState {
 
     private final Map<UUID, Consist> trains = new LinkedHashMap<>();
 
+    // Departure logs per terminus station, kept in memory to space departures evenly.
+    private final Map<Long, TerminusLog> termini = new HashMap<>();
 
     private final Set<PathKey> dirty = new LinkedHashSet<>();
 
@@ -95,6 +98,11 @@ public final class MetroState extends PersistentState {
 
     public Consist train(UUID id) {
         return this.trains.get(id);
+    }
+
+    // The departure log of the terminus at a station block.
+    TerminusLog terminus(BlockPos pos) {
+        return this.termini.computeIfAbsent(pos.asLong(), key -> new TerminusLog());
     }
 
     void addTrain(Consist train) {

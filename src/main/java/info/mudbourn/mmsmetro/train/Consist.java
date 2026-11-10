@@ -576,11 +576,43 @@ public final class Consist {
             return;
         }
 
+        if (this.reverseAfterDwell && holdForInterval()) {
+            return;
+        }
+
         this.heldAtPlatform = false;
+        if (this.reverseAfterDwell && nextStation() != null) {
+            this.state.terminus(nextStation().pos()).depart(this.id, this.world.getTime());
+        }
         playFromLead(ModSounds.DEPARTURE, 1.0f);
         applyDepartureDirection(nextStation());
         this.departing = true;
         this.departTimer = DEPART_DELAY_TICKS;
+    }
+
+    // True while the train waits at a terminus so departures from it stay an even share of the round trip apart.
+    private boolean holdForInterval() {
+        PathStation here = nextStation();
+        if (here == null) {
+            return false;
+        }
+        long wait = this.state.terminus(here.pos()).waitTicks(this.world.getTime(), trainsOnLine());
+        if (wait <= 0L) {
+            return false;
+        }
+        this.waitReason = "spacing out departures";
+        return true;
+    }
+
+    // Trains serving the same line as this one, itself included.
+    private int trainsOnLine() {
+        int count = 0;
+        for (Consist other : this.state.trains()) {
+            if (other.currentLine.equalsIgnoreCase(this.currentLine)) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private void tickRolling() {
