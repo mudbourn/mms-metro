@@ -136,6 +136,11 @@ public class MetroCarEntity extends Entity {
         this.dataTracker.set(POS_Z, (float) z);
     }
 
+    // True once the server has published a path position, so the car is never pulled toward the origin before it arrives.
+    private boolean hasTrackedPos() {
+        return this.dataTracker.get(POS_X) != 0.0f || this.dataTracker.get(POS_Y) != 0.0f || this.dataTracker.get(POS_Z) != 0.0f;
+    }
+
     private Vec3d trackedPos() {
         return new Vec3d(this.dataTracker.get(POS_X), this.dataTracker.get(POS_Y), this.dataTracker.get(POS_Z));
     }
@@ -256,7 +261,7 @@ public class MetroCarEntity extends Entity {
     @Override
     public void tick() {
         super.tick();
-        if (this.getEntityWorld().isClient()) {
+        if (this.getEntityWorld().isClient() && hasTrackedPos()) {
             snapOnDiscontinuity();
             this.interpolator.refreshPositionAndAngles(trackedPos(), this.getYaw(), this.getPitch());
             this.interpolator.tick();

@@ -642,7 +642,7 @@ public final class Consist {
                 continue;
             }
             if (car == null) {
-                car = spawnView(i, point);
+                car = spawnView(i, point, arc);
                 if (car == null) {
                     continue;
                 }
@@ -671,12 +671,20 @@ public final class Consist {
         }
     }
 
-    private MetroCarEntity spawnView(int index, PathPoint point) {
+    // Spawns a car with its path position already published, so the spawn packet carries it.
+    private MetroCarEntity spawnView(int index, PathPoint point, double arc) {
         MetroCarEntity car = new MetroCarEntity(ModEntities.METRO_CAR, this.world);
         car.markView();
         car.setConsistId(this.id);
         car.setCarIndex(index);
+        car.setCarCount(this.carCount);
         car.setPosition(point.pos().x, point.pos().y, point.pos().z);
+        car.setYaw(point.yaw());
+        car.setPitch(point.pitch());
+        car.setPathYaw(point.yaw());
+        car.setPathPitch(point.pitch());
+        car.setTrackedPos(point.pos().x, point.pos().y, point.pos().z);
+        car.setArcLength((float) arc);
         return this.world.spawnEntity(car) ? car : null;
     }
 
