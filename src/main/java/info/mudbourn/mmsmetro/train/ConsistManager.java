@@ -121,17 +121,29 @@ public final class ConsistManager {
         return lineName.replaceAll("[^A-Za-z0-9]", "");
     }
 
-    // Starts circulating a line from its terminal stations, one wave per terminal at a time, reporting progress to the source; returns the trains it will place.
+    // Starts circulating a line from its terminal stations, one wave per terminal at a time, reporting progress to the source; returns the trains it will place, or -1 when it refused after reporting why.
     public static int circulate(ServerCommandSource source, String lineId, int cars, MetroConfig config) {
         ServerWorld world = source.getWorld();
         List<BlockPos> stations = StationIndex.stationsOnLine(world, lineId);
         if (stations.isEmpty()) {
             return 0;
         }
+        List<BlockPos> terminals = terminalStations(world, stations);
+        Set<String> terminalNames = new LinkedHashSet<>();
+        for (BlockPos terminal : terminals) {
+            if (world.getBlockEntity(terminal) instanceof StationBlockEntity station) {
+                terminalNames.add(station.getStationName());
+            }
+        }
+        if (terminalNames.size() > 2) {
+            source.sendError(Text.literal("Line '" + lineId + "' has " + terminalNames.size()
+                + " terminal stations (" + String.join(", ", terminalNames) + "); a line can have at most two. Not circulating."));
+            return -1;
+        }
         MetroState state = MetroState.of(world);
         String lineName = lineId;
         List<Circulation.Launcher> launchers = new ArrayList<>();
-        for (BlockPos terminal : terminalStations(world, stations)) {
+        for (BlockPos terminal : terminals) {
             if (!(world.getBlockEntity(terminal) instanceof StationBlockEntity station)) {
                 continue;
             }
@@ -167,7 +179,7 @@ public final class ConsistManager {
         return ends[0].equals(ends[1]) ? List.of(ends[0]) : List.of(ends[0], ends[1]);
     }
 
-    // A terminal's launcher: the path toward its Next Station, trains starting with the tail at the terminal, enough trains to leave a circulateGapSeconds gap over the run to the far terminus.
+    // A terminal's launcher: the path toward its Next Station, trains starting with the tail at the terminal, one train for every SPACING_STOPS stops up to the far terminus.
     private static Circulation.Launcher launcherAt(MetroState state, ServerWorld world, BlockPos terminal,
             StationBlockEntity station, int cars, MetroConfig config) {
         BlockPos rail = railNearStation(world, terminal);
@@ -183,13 +195,13 @@ public final class ConsistManager {
             return null;
         }
         double headArc = Math.min((cars - 1) * config.carSpacing, path.length());
-        double firstStop = Circulation.firstStopArc(path, headArc, station.getStationName());
-        if (Double.isNaN(firstStop)) {
+        List<PathStation> stops = Circulation.stopsAhead(path, headArc, station.getStationName());
+        if (stops.isEmpty()) {
             return null;
         }
-        double gapTicks = Math.max(1.0, config.circulateGapSeconds) * 20.0;
-        int trains = (int) Math.ceil(Consist.oneWayTicks(path, headArc, config) / gapTicks);
-        return new Circulation.Launcher(path, headArc, firstStop, Math.max(1, trains));
+        double trigger = stops.get(Math.min(Circulation.SPACING_STOPS, stops.size()) - 1).arc();
+        int trains = (stops.size() + Circulation.SPACING_STOPS - 1) / Circulation.SPACING_STOPS;
+        return new Circulation.Launcher(path, headArc, trigger, station.getStationName(), stops.get(0).name(), trains);
     }
 
     // The two ends of a line: the start terminal and the opposite terminal.

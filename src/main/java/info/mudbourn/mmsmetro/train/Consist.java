@@ -973,23 +973,6 @@ public final class Consist {
         return visits;
     }
 
-    // Ticks a train starting at rest at an arc takes to reach the first terminus ahead, or the last stop, counting each run, dwell and departure delay including the dwell at the end.
-    static double oneWayTicks(RailPath path, double fromArc, MetroConfig config) {
-        double ticks = 0.0;
-        double x = fromArc;
-        PathStation stop = nextStopFrom(path, x, 1);
-        while (stop != null) {
-            ticks += runTicks(stop.arc() - x, 0.0, config);
-            ticks += (stop.dwellTicks() > 0 ? stop.dwellTicks() : config.dwellTicks) + DEPART_DELAY_TICKS;
-            x = stop.arc();
-            if (stop.terminus()) {
-                break;
-            }
-            stop = nextStopFrom(path, x, 1);
-        }
-        return ticks;
-    }
-
     // Ticks to cover a distance from a starting speed and stop at its end, accelerating to top speed and braking at the configured rate.
     private static double runTicks(double distance, double fromSpeed, MetroConfig config) {
         double accel = Math.max(1.0e-4, config.acceleration);
@@ -1052,6 +1035,20 @@ public final class Consist {
             return 0;
         }
         return this.departing ? this.departTimer : this.dwellTimer + DEPART_DELAY_TICKS;
+    }
+
+    // True while the train is running between stops rather than dwelling at one.
+    boolean isRunning() {
+        return this.phase == Phase.RUNNING;
+    }
+
+    // Names of the stop the train is at or running to and the stop after it on its path, empty where there is none.
+    String[] nextTwoStops() {
+        List<PathStation> stations = this.path.stations();
+        int i = this.nextStationIndex;
+        String first = i < stations.size() ? stations.get(i).name() : "";
+        String second = i + 1 < stations.size() ? stations.get(i + 1).name() : "";
+        return new String[]{first, second};
     }
 
     private PathStation nextStation() {

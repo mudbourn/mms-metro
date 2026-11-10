@@ -161,7 +161,7 @@ public final class MetroCommand {
         if (trains == 0) {
             source.sendError(Text.literal("No loaded terminal station with a stop ahead found for line '" + line + "'."));
         }
-        return trains;
+        return Math.max(0, trains);
     }
 
     private static int removeLine(ServerCommandSource source, String line) {
