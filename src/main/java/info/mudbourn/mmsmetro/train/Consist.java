@@ -10,9 +10,11 @@ import info.mudbourn.mmsmetro.path.PathStation;
 import info.mudbourn.mmsmetro.path.RailPath;
 import info.mudbourn.mmsmetro.registry.ModEntities;
 import info.mudbourn.mmsmetro.registry.ModSounds;
+import net.fabricmc.fabric.api.networking.v1.PlayerLookup;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.nbt.NbtCompound;
+import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.sound.SoundCategory;
 import net.minecraft.sound.SoundEvent;
@@ -65,6 +67,12 @@ public final class Consist {
     private int carCount;
 
     private MetroCarEntity[] views;
+
+    // Chunk radius the car entity type is tracked within, matching its registered max tracking range.
+    private static final int TRACKING_CHUNKS = 10;
+
+    // Ticks left before a scheduled redraw fires, or zero when none is due.
+    private int redrawIn;
 
     private boolean lost;
 
@@ -475,6 +483,7 @@ public final class Consist {
 
     private void arriveAt(PathStation station) {
         SpeakerSound.play(this.world, station.speaker(), ModSounds.ARRIVAL);
+        redrawIfUnseen();
         this.phase = Phase.DWELLING;
         this.departing = false;
         this.departTimer = 0;
@@ -671,6 +680,37 @@ public final class Consist {
         return true;
     }
 
+    // Schedules a redraw after the given number of ticks, keeping any sooner one.
+    void scheduleRedraw(int ticks) {
+        this.redrawIn = this.redrawIn > 0 ? Math.min(this.redrawIn, ticks) : ticks;
+    }
+
+    // Counts down a scheduled redraw and fires it once due if a player is within the given chunk distance of a car.
+    void tickRedraw(int chunks) {
+        if (this.redrawIn <= 0 || --this.redrawIn > 0) {
+            return;
+        }
+        for (PlayerEntity player : this.world.getPlayers()) {
+            if (anyCarWithinChunks(player.getEntityPos(), chunks)) {
+                redraw();
+                return;
+            }
+        }
+    }
+
+    // True when any car sits in a chunk within the given chunk distance of a position.
+    boolean anyCarWithinChunks(Vec3d point, int chunks) {
+        int px = BlockPos.ofFloored(point).getX() >> 4;
+        int pz = BlockPos.ofFloored(point).getZ() >> 4;
+        for (int i = 0; i < this.carCount; i++) {
+            BlockPos car = BlockPos.ofFloored(this.path.sample(carArc(i)).pos());
+            if (Math.max(Math.abs((car.getX() >> 4) - px), Math.abs((car.getZ() >> 4) - pz)) <= chunks) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Drops every view without a player rider so the next sync respawns it.
     void redraw() {
         for (int i = 0; i < this.views.length; i++) {
@@ -719,6 +759,7 @@ public final class Consist {
             }
             this.announcement = buildAnnouncement(bump);
             SpeakerSound.play(this.world, bump.speaker(), ModSounds.TRAIN_INCOMING);
+            redrawIfUnseen();
             if (!this.approachBraking) {
                 this.easeStartArc = this.headArc;
                 this.easeStartSpeed = Math.max(this.speed, this.config.acceleration);
@@ -952,6 +993,26 @@ public final class Consist {
             return;
         }
         this.world.playSound(null, pos.x, pos.y, pos.z, sound, SoundCategory.NEUTRAL, volume, 1.0f);
+        redrawIfUnseen();
+    }
+
+    // Redraws the train when a player is not tracking a live car that sits within both the simulation and tracking distance of them.
+    private void redrawIfUnseen() {
+        int chunks = Math.min(this.world.getServer().getPlayerManager().getSimulationDistance(), TRACKING_CHUNKS);
+        for (ServerPlayerEntity player : this.world.getPlayers()) {
+            ChunkPos at = player.getChunkPos();
+            for (MetroCarEntity car : this.views) {
+                if (car == null || car.isRemoved()) {
+                    continue;
+                }
+                ChunkPos carAt = car.getChunkPos();
+                boolean near = Math.max(Math.abs(carAt.x - at.x), Math.abs(carAt.z - at.z)) <= chunks;
+                if (near && !PlayerLookup.tracking(car).contains(player)) {
+                    redraw();
+                    return;
+                }
+            }
+        }
     }
 
     // Serializes the train's motion and display state.
