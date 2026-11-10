@@ -840,8 +840,8 @@ public final class Consist {
         return stations.size();
     }
 
-    // One predicted call at a station: ticks from now until arrival, the direction shown then, and whether the train is already there.
-    public record Visit(double ticks, String direction, boolean atPlatform) {
+    // One predicted call at a station: ticks from now until arrival, the direction shown then, the terminal it runs to, and whether the train is already there.
+    public record Visit(double ticks, String direction, String terminal, boolean atPlatform) {
     }
 
     // Predicts the next calls at a station block by walking the route, timing each run from stop to stop with acceleration and braking, and counting dwells, loop laps and turn-arounds onto baked reverse paths.
@@ -857,7 +857,7 @@ public final class Consist {
         PathStation here = nextStation();
         if (this.phase == Phase.DWELLING && here != null) {
             if (here.pos().equals(stationPos)) {
-                visits.add(new Visit(0.0, label, true));
+                visits.add(new Visit(0.0, label, terminalFrom(walk, here, 1), true));
             }
             ticks = ticksUntilDeparture();
             startSpeed = 0.0;
@@ -909,7 +909,7 @@ public final class Consist {
             startSpeed = 0.0;
             x = stop.arc();
             if (stop.pos().equals(stationPos)) {
-                visits.add(new Visit(ticks, label, false));
+                visits.add(new Visit(ticks, label, terminalFrom(walk, stop, dir), false));
             }
             ticks += (stop.dwellTicks() > 0 ? stop.dwellTicks() : this.config.dwellTicks) + DEPART_DELAY_TICKS;
             if (!stop.direction().isEmpty()) {
@@ -954,6 +954,22 @@ public final class Consist {
     // Head arc a train starts from after turning onto a path, matching reverse().
     private double turnStartArc(RailPath next) {
         return Math.min((this.carCount - 1) * this.config.carSpacing, next.length());
+    }
+
+    // Name of the stop a train leaving a station runs to: the first terminus beyond it, else the farthest stop that way, else the station itself.
+    private static String terminalFrom(RailPath walk, PathStation from, int dir) {
+        PathStation end = from;
+        double x = from.arc();
+        PathStation stop = nextStopFrom(walk, x, dir);
+        while (stop != null) {
+            end = stop;
+            if (stop.terminus()) {
+                break;
+            }
+            x = stop.arc();
+            stop = nextStopFrom(walk, x, dir);
+        }
+        return end.name();
     }
 
     // Nearest station strictly beyond an arc in a travel direction, or null when none lies that way.

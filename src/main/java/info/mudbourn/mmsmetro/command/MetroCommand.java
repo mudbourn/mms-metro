@@ -153,13 +153,10 @@ public final class MetroCommand {
 
     private static int circulate(ServerCommandSource source, String line) {
         int count = MmsMetro.config().carsPerTrain;
-        int trains = ConsistManager.circulate(source.getWorld(), line, count, MmsMetro.config());
+        int trains = ConsistManager.circulate(source, line, count, MmsMetro.config());
         if (trains == 0) {
-            source.sendError(Text.literal("No loaded stations found for line '" + line + "'."));
-            return 0;
+            source.sendError(Text.literal("No loaded terminal station with a stop ahead found for line '" + line + "'."));
         }
-        source.sendFeedback(() -> Text.literal(
-            "Circulating " + line + " with " + trains + " train(s); three more waves follow, alternating terminals."), true);
         return trains;
     }
 

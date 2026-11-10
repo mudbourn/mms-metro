@@ -34,7 +34,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
-// The saved trains of one world: baked paths shared by trains, the trains themselves, and the circulate waves still to launch.
+// The saved trains of one world: baked paths shared by trains, and the trains themselves.
 public final class MetroState extends PersistentState {
 
     private static final Codec<MetroState> CODEC = NbtCompound.CODEC.xmap(MetroState::fromNbt, MetroState::toNbt);
@@ -56,7 +56,6 @@ public final class MetroState extends PersistentState {
 
     private final Map<UUID, Consist> trains = new LinkedHashMap<>();
 
-    private final List<PendingWave> waves = new ArrayList<>();
 
     private final Set<PathKey> dirty = new LinkedHashSet<>();
 
@@ -98,10 +97,6 @@ public final class MetroState extends PersistentState {
         return this.trains.get(id);
     }
 
-    List<PendingWave> waves() {
-        return this.waves;
-    }
-
     void addTrain(Consist train) {
         train.attach(this.world, this);
         this.trains.put(train.id(), train);
@@ -127,7 +122,6 @@ public final class MetroState extends PersistentState {
             train.discardViews();
         }
         this.trains.clear();
-        this.waves.clear();
         collectPaths();
         markDirty();
         return count;
@@ -350,11 +344,6 @@ public final class MetroState extends PersistentState {
             trainList.add(train.toNbt());
         }
         nbt.put("Trains", trainList);
-        NbtList waveList = new NbtList();
-        for (PendingWave wave : this.waves) {
-            waveList.add(wave.toNbt());
-        }
-        nbt.put("Waves", waveList);
         return nbt;
     }
 
@@ -378,14 +367,6 @@ public final class MetroState extends PersistentState {
                 state.trains.put(id, Consist.fromNbt(trainNbt, id, MmsMetro.config(), path));
             } catch (IllegalArgumentException e) {
                 MmsMetro.LOGGER.warn("Dropping a saved train with a bad id");
-            }
-        }
-        NbtList waveList = nbt.getListOrEmpty("Waves");
-        for (int i = 0; i < waveList.size(); i++) {
-            try {
-                state.waves.add(PendingWave.fromNbt(waveList.getCompoundOrEmpty(i)));
-            } catch (IllegalArgumentException e) {
-                MmsMetro.LOGGER.warn("Dropping a saved wave with a bad trigger id");
             }
         }
         return state;

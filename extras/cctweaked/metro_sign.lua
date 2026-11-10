@@ -5,8 +5,7 @@ local CONFIG = {
   station = "Central",
   line = "Line 1",
   lineColor = "red",
-  direction = "Northbound",
-  nextStation = "Harbour",
+  direction = "NORTHBOUND",
   transferLine = "",
   exitSide = "Left",
   terminus = false,
@@ -116,6 +115,16 @@ local function split(mon, y, label, status, accent)
   mon.write(status)
 end
 
+-- Draw the clock band along the bottom, padded a row above and below when tall enough, and return its top row
+local function footer(mon, h, rows)
+  local top = h - rows + 1
+  for y = top, h do
+    centre(mon, y, "", colors.white, colors.gray)
+  end
+  centre(mon, top + math.floor((rows - 1) / 2), textutils.formatTime(os.time(), true), colors.white, colors.gray)
+  return top
+end
+
 -- Format seconds as m:ss
 local function clock(seconds)
   return string.format("%d:%02d", math.floor(seconds / 60), seconds % 60)
@@ -142,7 +151,6 @@ local function readStation(station)
     line = info.line,
     lineColor = info.lineColor,
     direction = info.direction,
-    nextStation = info.nextStation,
     transferLine = info.hub and info.transferLine or "",
     exitSide = info.exitSide,
     terminus = info.terminus,
@@ -158,7 +166,7 @@ local function arrivalStatus(a, blink)
 end
 
 -- Draw up to max arrivals from row y, stopping before row last
-local function drawArrivals(mon, y, last, arrivals, blink, compact)
+local function drawArrivals(mon, y, last, arrivals, blink)
   if not arrivals or #arrivals == 0 then
     if y <= last then
       row(mon, y, "No trains due", "", colors.gray)
@@ -171,9 +179,9 @@ local function drawArrivals(mon, y, last, arrivals, blink, compact)
     end
     local a = arrivals[i]
     local status, accent = arrivalStatus(a, blink)
-    local label = a.direction
-    if not compact and a.line ~= "" then
-      label = a.line .. " " .. label
+    local label = a.terminal or ""
+    if label == "" then
+      label = a.direction or ""
     end
     if label == "" then
       label = "Train"
@@ -193,11 +201,7 @@ local function drawFull(mon, info, arrivals, blink)
   if info.terminus then
     row(mon, y, "This train", "terminates here", colors.orange)
   else
-    if info.direction ~= "" then
-      row(mon, y, "Towards", info.direction, bar == colors.black and colors.white or bar)
-      y = y + 1
-    end
-    row(mon, y, "Next stop", info.nextStation)
+    row(mon, y, "Direction", info.direction, bar == colors.black and colors.white or bar)
   end
   y = y + 1
   if info.transferLine ~= "" then
@@ -208,10 +212,10 @@ local function drawFull(mon, info, arrivals, blink)
     row(mon, y, "Doors open", info.exitSide)
     y = y + 1
   end
+  local band = footer(mon, h, 3)
   if arrivals then
-    drawArrivals(mon, y + 1, h - 1, arrivals, blink, false)
+    drawArrivals(mon, y + 1, band - 1, arrivals, blink)
   end
-  centre(mon, h, textutils.formatTime(os.time(), true), colors.white, colors.gray)
 end
 
 -- Compact layout for short monitors such as a 3x1 wall
@@ -229,13 +233,16 @@ local function drawCompact(mon, info, arrivals, blink)
   if info.terminus then
     row(mon, 2, "Terminates here", "", colors.orange)
   else
-    row(mon, 2, "Next", info.nextStation)
+    row(mon, 2, "Direction", info.direction)
+  end
+  local band = h + 1
+  if h >= 6 then
+    band = footer(mon, h, 3)
+  elseif h >= 4 then
+    band = footer(mon, h, 1)
   end
   if arrivals then
-    drawArrivals(mon, 3, h - 1, arrivals, blink, true)
-  end
-  if h >= 4 then
-    centre(mon, h, textutils.formatTime(os.time(), true), colors.white, colors.gray)
+    drawArrivals(mon, 3, band - 1, arrivals, blink)
   end
 end
 

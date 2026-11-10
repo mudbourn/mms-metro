@@ -5,7 +5,6 @@ import info.mudbourn.mmsmetro.block.entity.StationBlockEntity;
 import info.mudbourn.mmsmetro.config.MetroConfig;
 import info.mudbourn.mmsmetro.entity.MetroCarEntity;
 import info.mudbourn.mmsmetro.item.MetroSpawnerItem;
-import info.mudbourn.mmsmetro.path.PathJunction;
 import info.mudbourn.mmsmetro.path.PathKey;
 import info.mudbourn.mmsmetro.path.PathStation;
 import info.mudbourn.mmsmetro.path.RailPath;
@@ -19,6 +18,7 @@ import net.minecraft.block.AbstractRailBlock;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
@@ -45,18 +45,11 @@ import java.util.UUID;
 // Ticks the saved trains of each world and spawns, lists and removes them.
 public final class ConsistManager {
 
-    // Number of interleaved waves a circulate lays down, alternating the terminal they launch from.
-    private static final int WAVE_COUNT = 4;
-
-    // The wave just launched: how many trains it placed and the id of its terminal train, if any.
-    private record Launch(int spawned, UUID terminal) {
-    }
+    // Running circulations, ticked with their world.
+    private static final List<Circulation> CIRCULATIONS = new ArrayList<>();
 
     // Ticks to wait after a teleport or a circulate spawn before redrawing, so the client has the chunks.
-    private static final int REDRAW_DELAY = 20;
-
-    // Leg room, in blocks of arc, kept clear between a spawned train's ends and any junction.
-    private static final double JUNCTION_CLEARANCE = 2.0;
+    static final int REDRAW_DELAY = 20;
 
     // Blocks a player must jump in one tick for the move to count as a teleport.
     private static final double TELEPORT_DISTANCE = 16.0;
@@ -76,6 +69,7 @@ public final class ConsistManager {
         ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
             LegacyCars.clear();
             LAST_SEEN.clear();
+            CIRCULATIONS.clear();
             TrainTickets.clear();
         });
     }
@@ -115,7 +109,7 @@ public final class ConsistManager {
     }
 
     // Creates a train on a baked path with its lead at headArc and seats its views.
-    private static Consist createTrain(MetroState state, RailPath path, double headArc, int cars, MetroConfig config) {
+    static Consist createTrain(MetroState state, RailPath path, double headArc, int cars, MetroConfig config) {
         Consist consist = new Consist(UUID.randomUUID(), config, path, headArc, cars);
         state.addTrain(consist);
         consist.syncViews();
@@ -127,80 +121,79 @@ public final class ConsistManager {
         return lineName.replaceAll("[^A-Za-z0-9]", "");
     }
 
-    // Lays out WAVE_COUNT interleaved waves and launches the first, queuing the rest to fire in turn; returns the number of trains in the first wave.
-    public static int circulate(ServerWorld world, String lineId, int cars, MetroConfig config) {
-        List<Wave> plan = planWaves(world, lineId);
-        if (plan.isEmpty()) {
-            return 0;
-        }
-
-        MetroState state = MetroState.of(world);
-        Launch first = spawnWave(state, plan.get(0), cars, config);
-        if (first.spawned() <= 0) {
-            return 0;
-        }
-        queueRemaining(state, first.terminal(), plan, 0, cars);
-        return first.spawned();
-    }
-
-    // Builds the alternating-terminal wave plan: even waves run inward from the start terminal, odd waves inward from the opposite one.
-    private static List<Wave> planWaves(ServerWorld world, String lineId) {
+    // Starts circulating a line from its terminal stations, one wave per terminal at a time, reporting progress to the source; returns the trains it will place.
+    public static int circulate(ServerCommandSource source, String lineId, int cars, MetroConfig config) {
+        ServerWorld world = source.getWorld();
         List<BlockPos> stations = StationIndex.stationsOnLine(world, lineId);
         if (stations.isEmpty()) {
-            return List.of();
+            return 0;
         }
-
-        BlockPos[] terminals = terminals(stations);
-        Wave forward = buildWave(world, terminals[0], lineId);
-        if (forward == null) {
-            return List.of();
+        MetroState state = MetroState.of(world);
+        String lineName = lineId;
+        List<Circulation.Launcher> launchers = new ArrayList<>();
+        for (BlockPos terminal : terminalStations(world, stations)) {
+            if (!(world.getBlockEntity(terminal) instanceof StationBlockEntity station)) {
+                continue;
+            }
+            Circulation.Launcher launcher = launcherAt(state, world, terminal, station, lineId, cars, config);
+            if (launcher != null) {
+                launchers.add(launcher);
+                if (!station.getLineName().isEmpty()) {
+                    lineName = station.getLineName();
+                }
+            }
         }
-        Wave reverse = buildWave(world, terminals[1], lineId);
-
-        List<Wave> plan = new ArrayList<>();
-        for (int i = 0; i < WAVE_COUNT; i++) {
-            Wave wave = (i % 2 == 1 && reverse != null) ? reverse : forward;
-            plan.add(wave);
+        if (launchers.isEmpty()) {
+            return 0;
         }
-        return plan;
+        Circulation circulation = new Circulation(world, lineName, source, launchers, cars);
+        CIRCULATIONS.add(circulation);
+        circulation.tick(state, config);
+        return circulation.total();
     }
 
-    // Resolves the wave launched inward from one terminal: its canonical path, the every-other-stop arcs, and the nearest stop's arc as the trigger for the following wave.
-    private static Wave buildWave(ServerWorld world, BlockPos terminal, String lineId) {
+    // The line's stations marked terminus, or its two farthest-apart stations when none is marked.
+    private static List<BlockPos> terminalStations(ServerWorld world, List<BlockPos> stations) {
+        List<BlockPos> marked = new ArrayList<>();
+        for (BlockPos pos : stations) {
+            if (world.getBlockEntity(pos) instanceof StationBlockEntity station && station.isTerminus()) {
+                marked.add(pos);
+            }
+        }
+        if (!marked.isEmpty()) {
+            return marked;
+        }
+        BlockPos[] ends = terminals(stations);
+        return ends[0].equals(ends[1]) ? List.of(ends[0]) : List.of(ends[0], ends[1]);
+    }
+
+    // A terminal's launcher: the path toward its Next Station, trains starting with the tail at the terminal, one train for every other stop on the path.
+    private static Circulation.Launcher launcherAt(MetroState state, ServerWorld world, BlockPos terminal,
+            StationBlockEntity station, String lineId, int cars, MetroConfig config) {
         BlockPos rail = railNearStation(world, terminal);
         if (rail == null) {
             return null;
         }
-        RailPath path = buildFromTerminal(world, terminal, rail);
+        RailPath built = buildFromTerminal(world, terminal, rail);
+        if (built == null) {
+            return null;
+        }
+        RailPath path = state.pathFor(built.key());
         if (path == null) {
             return null;
         }
-
-        List<PathStation> stops = new ArrayList<>();
-        Set<BlockPos> seen = new HashSet<>();
-        for (PathStation station : path.stations()) {
-            if (lineId(station.line()).equalsIgnoreCase(lineId) && seen.add(station.pos())) {
-                stops.add(station);
-            }
-        }
-        if (stops.isEmpty()) {
+        double headArc = Math.min((cars - 1) * config.carSpacing, path.length());
+        double firstStop = Circulation.firstStopArc(path, headArc, station.getStationName());
+        if (Double.isNaN(firstStop)) {
             return null;
         }
-        double triggerArc = stops.get(stops.size() >= 2 ? 1 : 0).arc();
-        return new Wave(path.key().origin(), path.key().dir(), everyOtherArc(stops), triggerArc);
-    }
-
-    // Queues the waves after index `from`, each waiting on the terminal train of the wave before it.
-    private static void queueRemaining(MetroState state, UUID terminal, List<Wave> plan, int from, int cars) {
-        if (terminal == null || from + 1 >= plan.size()) {
-            return;
+        Set<BlockPos> stops = new HashSet<>();
+        for (PathStation stop : path.stations()) {
+            if (lineId(stop.line()).equalsIgnoreCase(lineId)) {
+                stops.add(stop.pos());
+            }
         }
-        state.waves().add(new PendingWave(
-            terminal,
-            plan.get(from).triggerArc(),
-            new ArrayList<>(plan.subList(from + 1, plan.size())),
-            cars
-        ));
+        return new Circulation.Launcher(path, headArc, firstStop, Math.max(1, (stops.size() + 1) / 2));
     }
 
     // The two ends of a line: the start terminal and the opposite terminal.
@@ -296,7 +289,7 @@ public final class ConsistManager {
     }
 
     // True when a train already sits within a car spacing of any point a new train would occupy along the path.
-    private static boolean arcOccupied(MetroState state, RailPath path, double headArc, int cars, MetroConfig config) {
+    static boolean arcOccupied(MetroState state, RailPath path, double headArc, int cars, MetroConfig config) {
         double clearance = config.carSpacing;
         for (int i = 0; i < cars; i++) {
             Vec3d point = path.sample(Math.max(0.0, headArc - i * config.carSpacing)).pos();
@@ -307,105 +300,6 @@ public final class ConsistManager {
             }
         }
         return false;
-    }
-
-    // True when a junction sits ahead of the head within the clearance, or behind it within the train's length plus the clearance.
-    private static boolean overJunction(RailPath path, double headArc, int cars, MetroConfig config) {
-        double reach = (cars - 1) * config.carSpacing + JUNCTION_CLEARANCE;
-        for (PathJunction junction : path.junctions()) {
-            double behind = headArc - junction.arc();
-            if (behind > -JUNCTION_CLEARANCE && behind < reach) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // Arc positions of every other stop from the start terminal, the stations a single wave fills.
-    private static List<Double> everyOtherArc(List<PathStation> stops) {
-        List<Double> arcs = new ArrayList<>();
-        for (int i = 0; i < stops.size(); i += 2) {
-            arcs.add(stops.get(i).arc());
-        }
-        return arcs;
-    }
-
-    // Spawns a train at each of the wave's stop arcs on the wave's baked path, turning one that faces a junction the wrong way round.
-    private static Launch spawnWave(MetroState state, Wave wave, int cars, MetroConfig config) {
-        RailPath path = state.pathFor(new PathKey(wave.origin(), wave.dir()));
-        if (path == null) {
-            return new Launch(0, null);
-        }
-        UUID terminal = null;
-        int spawned = 0;
-        for (int i = 0; i < wave.arcs().size(); i++) {
-            double headArc = Math.min(wave.arcs().get(i), path.length());
-            RailPath placed = path;
-            if (overJunction(path, headArc, cars, config)) {
-                placed = reorientedPath(state, path, headArc, cars, config);
-                if (placed == null) {
-                    continue;
-                }
-                headArc = placed.arcMatching(path, headArc);
-            }
-            if (arcOccupied(state, placed, headArc, cars, config)) {
-                continue;
-            }
-            Consist consist = createTrain(state, placed, headArc, cars, config);
-            consist.scheduleRedraw(REDRAW_DELAY);
-            spawned++;
-            if (i == 0 && placed == path) {
-                terminal = consist.id();
-            }
-        }
-        return new Launch(spawned, terminal);
-    }
-
-    // The path a train stopped at this head arc runs on facing the other way, its cars trailing over the track ahead; null when that still meets a junction or leaves no room.
-    private static RailPath reorientedPath(MetroState state, RailPath path, double headArc, int cars, MetroConfig config) {
-        double trainLength = (cars - 1) * config.carSpacing;
-        double tailArc = headArc + trainLength;
-        if (tailArc > path.length()) {
-            return null;
-        }
-        Direction back = Direction.fromHorizontalDegrees(path.sample(tailArc).yaw()).getOpposite();
-        RailPath turned = state.pathFor(new PathKey(path.nodeAt(tailArc), back));
-        if (turned == null) {
-            return null;
-        }
-        double turnedHead = turned.arcMatching(path, headArc);
-        if (Double.isNaN(turnedHead) || turnedHead < trainLength || overJunction(turned, turnedHead, cars, config)) {
-            return null;
-        }
-        return turned;
-    }
-
-    // Fires any queued wave whose preceding wave's terminal train has reached its trigger arc, and drops queues whose trigger train is gone.
-    private static void tickPendingWaves(MetroState state) {
-        List<PendingWave> chained = new ArrayList<>();
-        Iterator<PendingWave> it = state.waves().iterator();
-        while (it.hasNext()) {
-            PendingWave pending = it.next();
-            Consist trigger = state.train(pending.trigger());
-            if (trigger == null) {
-                it.remove();
-                continue;
-            }
-            Wave next = pending.remaining().get(0);
-            if (trigger.headArc() + 1.0e-3 >= pending.triggerArc()) {
-                it.remove();
-                Launch launched = spawnWave(state, next, pending.cars(), MmsMetro.config());
-                if (launched.terminal() != null && pending.remaining().size() > 1) {
-                    chained.add(new PendingWave(
-                        launched.terminal(),
-                        next.triggerArc(),
-                        new ArrayList<>(pending.remaining().subList(1, pending.remaining().size())),
-                        pending.cars()
-                    ));
-                }
-            }
-        }
-        state.waves().addAll(chained);
     }
 
     // Removes every train serving the line, returning how many trains were removed.
@@ -450,6 +344,7 @@ public final class ConsistManager {
         for (MetroCarEntity car : world.getEntitiesByType(ModEntities.METRO_CAR, car -> true)) {
             car.discard();
         }
+        cancelCirculations(world);
         return MetroState.of(world).removeAllTrains();
     }
 
@@ -549,6 +444,26 @@ public final class ConsistManager {
         LAST_SEEN.putAll(seen);
     }
 
+    // Advances the world's circulations and drops the finished ones.
+    private static void tickCirculations(ServerWorld world, MetroState state) {
+        Iterator<Circulation> it = CIRCULATIONS.iterator();
+        while (it.hasNext()) {
+            Circulation circulation = it.next();
+            if (circulation.world() != world) {
+                continue;
+            }
+            circulation.tick(state, MmsMetro.config());
+            if (circulation.finished()) {
+                it.remove();
+            }
+        }
+    }
+
+    // Stops every circulation in a world.
+    private static void cancelCirculations(ServerWorld world) {
+        CIRCULATIONS.removeIf(circulation -> circulation.world() == world);
+    }
+
     private static void tickWorld(ServerWorld world) {
         MetroState state = LegacyCars.hasPending(world) ? MetroState.of(world) : MetroState.peek(world);
         if (state == null) {
@@ -556,11 +471,11 @@ public final class ConsistManager {
         }
         LegacyCars.migrate(world, state);
         TrainTickets.update(world, state.trains());
-        if (state.trains().isEmpty() && state.waves().isEmpty()) {
+        tickCirculations(world, state);
+        if (state.trains().isEmpty()) {
             return;
         }
 
-        tickPendingWaves(state);
         for (Consist consist : new ArrayList<>(state.trains())) {
             consist.tick();
             consist.syncViews();

@@ -70,6 +70,7 @@ public final class StationPeripheral implements IPeripheral {
                 Map<String, Object> arrival = new HashMap<>();
                 arrival.put("line", consist.lineName());
                 arrival.put("direction", visit.direction());
+                arrival.put("terminal", visit.terminal());
                 arrival.put("cars", consist.carCount());
                 arrival.put("eta", Math.round(visit.ticks() / TICKS_PER_SECOND));
                 arrival.put("atPlatform", visit.atPlatform());
