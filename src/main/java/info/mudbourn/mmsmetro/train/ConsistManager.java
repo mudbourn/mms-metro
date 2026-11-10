@@ -34,7 +34,6 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -44,9 +43,6 @@ import java.util.UUID;
 
 // Ticks the saved trains of each world and spawns, lists and removes them.
 public final class ConsistManager {
-
-    // Running circulations, ticked with their world.
-    private static final List<Circulation> CIRCULATIONS = new ArrayList<>();
 
     // Ticks to wait after a teleport or a circulate spawn before redrawing, so the client has the chunks.
     static final int REDRAW_DELAY = 20;
@@ -69,7 +65,6 @@ public final class ConsistManager {
         ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
             LegacyCars.clear();
             LAST_SEEN.clear();
-            CIRCULATIONS.clear();
             TrainTickets.clear();
         });
     }
@@ -121,7 +116,7 @@ public final class ConsistManager {
         return lineName.replaceAll("[^A-Za-z0-9]", "");
     }
 
-    // Starts circulating a line from its terminal stations, one wave per terminal at a time, reporting progress to the source; returns the trains it will place, or -1 when it refused after reporting why.
+    // Circulates a line by seeding trains over every other stop from each terminal, reporting to the source; returns the trains placed, or -1 when it refused after reporting why.
     public static int circulate(ServerCommandSource source, String lineId, int cars, MetroConfig config) {
         ServerWorld world = source.getWorld();
         List<BlockPos> stations = StationIndex.stationsOnLine(world, lineId);
@@ -147,7 +142,7 @@ public final class ConsistManager {
             if (!(world.getBlockEntity(terminal) instanceof StationBlockEntity station)) {
                 continue;
             }
-            Circulation.Launcher launcher = launcherAt(state, world, terminal, station, cars, config);
+            Circulation.Launcher launcher = launcherAt(state, world, terminal, station, launchers.size(), cars, config);
             if (launcher != null) {
                 launchers.add(launcher);
                 if (!station.getLineName().isEmpty()) {
@@ -158,10 +153,10 @@ public final class ConsistManager {
         if (launchers.isEmpty()) {
             return 0;
         }
-        Circulation circulation = new Circulation(world, lineName, source, launchers, cars);
-        CIRCULATIONS.add(circulation);
-        circulation.tick(state, config);
-        return circulation.total();
+        int spawned = Circulation.seed(state, launchers, cars, config);
+        String name = lineName;
+        source.sendFeedback(() -> Text.literal("Circulating " + name + ": " + spawned + " trains placed."), false);
+        return spawned;
     }
 
     // The line's stations marked terminus, or its two farthest-apart stations when none is marked.
@@ -179,9 +174,9 @@ public final class ConsistManager {
         return ends[0].equals(ends[1]) ? List.of(ends[0]) : List.of(ends[0], ends[1]);
     }
 
-    // A terminal's launcher: the path toward its Next Station, trains starting with the tail at the terminal, one train for every SPACING_STOPS stops up to the far terminus, launched evenly over the run there.
+    // A terminal's launcher: the path toward its Next Station and the seed arcs from the terminal, offset by its order so the directions interleave.
     private static Circulation.Launcher launcherAt(MetroState state, ServerWorld world, BlockPos terminal,
-            StationBlockEntity station, int cars, MetroConfig config) {
+            StationBlockEntity station, int order, int cars, MetroConfig config) {
         BlockPos rail = railNearStation(world, terminal);
         if (rail == null) {
             return null;
@@ -199,9 +194,7 @@ public final class ConsistManager {
         if (stops.isEmpty()) {
             return null;
         }
-        int trains = (stops.size() + Circulation.SPACING_STOPS - 1) / Circulation.SPACING_STOPS;
-        double interval = Consist.oneWayTicks(path, headArc, config) / trains;
-        return new Circulation.Launcher(path, headArc, interval, station.getStationName(), stops.get(0).name(), trains);
+        return new Circulation.Launcher(path, Circulation.seedArcs(headArc, stops, order));
     }
 
     // The two ends of a line: the start terminal and the opposite terminal.
@@ -352,7 +345,6 @@ public final class ConsistManager {
         for (MetroCarEntity car : world.getEntitiesByType(ModEntities.METRO_CAR, car -> true)) {
             car.discard();
         }
-        cancelCirculations(world);
         return MetroState.of(world).removeAllTrains();
     }
 
@@ -443,26 +435,6 @@ public final class ConsistManager {
         LAST_SEEN.putAll(seen);
     }
 
-    // Advances the world's circulations and drops the finished ones.
-    private static void tickCirculations(ServerWorld world, MetroState state) {
-        Iterator<Circulation> it = CIRCULATIONS.iterator();
-        while (it.hasNext()) {
-            Circulation circulation = it.next();
-            if (circulation.world() != world) {
-                continue;
-            }
-            circulation.tick(state, MmsMetro.config());
-            if (circulation.finished()) {
-                it.remove();
-            }
-        }
-    }
-
-    // Stops every circulation in a world.
-    private static void cancelCirculations(ServerWorld world) {
-        CIRCULATIONS.removeIf(circulation -> circulation.world() == world);
-    }
-
     private static void tickWorld(ServerWorld world) {
         MetroState state = LegacyCars.hasPending(world) ? MetroState.of(world) : MetroState.peek(world);
         if (state == null) {
@@ -470,7 +442,6 @@ public final class ConsistManager {
         }
         LegacyCars.migrate(world, state);
         TrainTickets.update(world, state.trains());
-        tickCirculations(world, state);
         if (state.trains().isEmpty()) {
             return;
         }
