@@ -54,6 +54,9 @@ public final class Consist {
     // Distance, in blocks, within which a station counts as the one a dwelling train stands at.
     private static final double STATION_REACH = 1.5;
 
+    // Blocks from a terminus within which an inbound train makes a departure skip its spacing hold.
+    private static final double INBOUND_REACH = 64.0;
+
     private final UUID id;
 
     private final MetroConfig config;
@@ -593,7 +596,7 @@ public final class Consist {
     // True while the train waits at a terminus so departures from it stay an even share of the round trip apart.
     private boolean holdForInterval() {
         PathStation here = nextStation();
-        if (here == null) {
+        if (here == null || trainInbound(here)) {
             return false;
         }
         long wait = this.state.terminus(here.pos()).waitTicks(this.world.getTime(), trainsOnLine());
@@ -602,6 +605,21 @@ public final class Consist {
         }
         this.waitReason = "spacing out departures";
         return true;
+    }
+
+    // True when another train running toward the given terminus is close enough to be waiting at or nearing its junction.
+    private boolean trainInbound(PathStation terminus) {
+        for (Consist other : this.state.trains()) {
+            if (other == this || other.phase != Phase.RUNNING) {
+                continue;
+            }
+            PathStation next = other.nextStation();
+            if (next != null && next.name().equalsIgnoreCase(terminus.name())
+                    && Math.abs(next.arc() - other.headArc) <= INBOUND_REACH) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // Trains serving the same line as this one, itself included.
