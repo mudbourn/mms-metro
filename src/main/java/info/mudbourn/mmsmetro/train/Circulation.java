@@ -11,10 +11,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-// Seeds a line's trains in one pass, spread over every other stop in each direction so the two directions interleave.
+// Seeds a line's trains in one pass, spread evenly over the stops of both directions in round-trip order.
 final class Circulation {
 
-    // Stops per train along one direction.
+    // Stops per train when no train count is given.
     static final int SPACING_STOPS = 2;
 
     // One terminal's share of the seeding: the path it runs on and the lead arcs its trains start at.
@@ -24,8 +24,8 @@ final class Circulation {
     private Circulation() {
     }
 
-    // A terminal's seed arcs: the terminal and its stops short of the far terminus, every SPACING_STOPS-th from an offset.
-    static List<Double> seedArcs(double headArc, List<PathStation> stops, int offset) {
+    // A terminal's seed arcs: the terminal and its stops short of the far terminus.
+    static List<Double> seedArcs(double headArc, List<PathStation> stops) {
         List<Double> positions = new ArrayList<>();
         positions.add(headArc);
         for (PathStation stop : stops) {
@@ -33,24 +33,37 @@ final class Circulation {
                 positions.add(stop.arc());
             }
         }
-        List<Double> arcs = new ArrayList<>();
-        for (int i = offset % SPACING_STOPS; i < positions.size(); i += SPACING_STOPS) {
-            arcs.add(positions.get(i));
-        }
-        return arcs;
+        return positions;
     }
 
-    // Spawns a train at every free seed arc and returns how many it placed.
-    static int seed(MetroState state, List<Launcher> launchers, int cars, MetroConfig config) {
-        int spawned = 0;
+    // Seed spots across every launcher in round-trip order.
+    static int spots(List<Launcher> launchers) {
+        int count = 0;
         for (Launcher launcher : launchers) {
-            for (double arc : launcher.arcs()) {
-                if (ConsistManager.arcOccupied(state, launcher.path(), arc, cars, config)) {
+            count += launcher.arcs().size();
+        }
+        return count;
+    }
+
+    // Spawns the requested number of trains, capped at one per spot, at evenly spaced free spots, and returns how many it placed.
+    static int seed(MetroState state, List<Launcher> launchers, int trains, int cars, MetroConfig config) {
+        int total = spots(launchers);
+        int wanted = Math.min(trains, total);
+        int spawned = 0;
+        for (int n = 0; n < wanted; n++) {
+            int index = (int) ((long) n * total / wanted);
+            for (Launcher launcher : launchers) {
+                if (index >= launcher.arcs().size()) {
+                    index -= launcher.arcs().size();
                     continue;
                 }
-                Consist consist = ConsistManager.createTrain(state, launcher.path(), arc, cars, config);
-                consist.scheduleRedraw(ConsistManager.REDRAW_DELAY);
-                spawned++;
+                double arc = launcher.arcs().get(index);
+                if (!ConsistManager.arcOccupied(state, launcher.path(), arc, cars, config)) {
+                    Consist consist = ConsistManager.createTrain(state, launcher.path(), arc, cars, config);
+                    consist.scheduleRedraw(ConsistManager.REDRAW_DELAY);
+                    spawned++;
+                }
+                break;
             }
         }
         return spawned;

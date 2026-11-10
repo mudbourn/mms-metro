@@ -116,8 +116,8 @@ public final class ConsistManager {
         return lineName.replaceAll("[^A-Za-z0-9]", "");
     }
 
-    // Circulates a line by seeding trains over every other stop from each terminal, reporting to the source; returns the trains placed, or -1 when it refused after reporting why.
-    public static int circulate(ServerCommandSource source, String lineId, int cars, MetroConfig config) {
+    // Circulates a line by seeding trains evenly over the stops from each terminal, every other stop when trains is 0, reporting to the source; returns the trains placed, or -1 when it refused after reporting why.
+    public static int circulate(ServerCommandSource source, String lineId, int trains, int cars, MetroConfig config) {
         ServerWorld world = source.getWorld();
         List<BlockPos> stations = StationIndex.stationsOnLine(world, lineId);
         if (stations.isEmpty()) {
@@ -142,7 +142,7 @@ public final class ConsistManager {
             if (!(world.getBlockEntity(terminal) instanceof StationBlockEntity station)) {
                 continue;
             }
-            Circulation.Launcher launcher = launcherAt(state, world, terminal, station, launchers.size(), cars, config);
+            Circulation.Launcher launcher = launcherAt(state, world, terminal, station, cars, config);
             if (launcher != null) {
                 launchers.add(launcher);
                 if (!station.getLineName().isEmpty()) {
@@ -153,9 +153,12 @@ public final class ConsistManager {
         if (launchers.isEmpty()) {
             return 0;
         }
-        int spawned = Circulation.seed(state, launchers, cars, config);
+        int spots = Circulation.spots(launchers);
+        int wanted = trains > 0 ? trains : (spots + Circulation.SPACING_STOPS - 1) / Circulation.SPACING_STOPS;
+        int spawned = Circulation.seed(state, launchers, wanted, cars, config);
         String name = lineName;
-        source.sendFeedback(() -> Text.literal("Circulating " + name + ": " + spawned + " trains placed."), false);
+        source.sendFeedback(() -> Text.literal("Circulating " + name + ": " + spawned + " trains placed over "
+            + spots + " stops (" + launchers.size() + " terminals)."), false);
         return spawned;
     }
 
@@ -174,9 +177,9 @@ public final class ConsistManager {
         return ends[0].equals(ends[1]) ? List.of(ends[0]) : List.of(ends[0], ends[1]);
     }
 
-    // A terminal's launcher: the path toward its Next Station and the seed arcs from the terminal, offset by its order so the directions interleave.
+    // A terminal's launcher: the path toward its Next Station and the seed arcs from the terminal.
     private static Circulation.Launcher launcherAt(MetroState state, ServerWorld world, BlockPos terminal,
-            StationBlockEntity station, int order, int cars, MetroConfig config) {
+            StationBlockEntity station, int cars, MetroConfig config) {
         BlockPos rail = railNearStation(world, terminal);
         if (rail == null) {
             return null;
@@ -194,7 +197,7 @@ public final class ConsistManager {
         if (stops.isEmpty()) {
             return null;
         }
-        return new Circulation.Launcher(path, Circulation.seedArcs(headArc, stops, order));
+        return new Circulation.Launcher(path, Circulation.seedArcs(headArc, stops));
     }
 
     // The two ends of a line: the start terminal and the opposite terminal.

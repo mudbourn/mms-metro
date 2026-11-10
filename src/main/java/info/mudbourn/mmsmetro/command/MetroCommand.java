@@ -46,7 +46,12 @@ public final class MetroCommand {
                 .then(CommandManager.argument("line", StringArgumentType.word())
                     .suggests((ctx, builder) -> suggestLineIds(ctx.getSource(), builder))
                     .executes(context -> circulate(context.getSource(),
-                        StringArgumentType.getString(context, "line")))))
+                        StringArgumentType.getString(context, "line"),
+                        0))
+                    .then(CommandManager.argument("trains", IntegerArgumentType.integer(1, 64))
+                        .executes(context -> circulate(context.getSource(),
+                            StringArgumentType.getString(context, "line"),
+                            IntegerArgumentType.getInteger(context, "trains"))))))
             .then(CommandManager.literal("remove")
                 .then(CommandManager.literal("all")
                     .executes(context -> removeAll(context.getSource())))
@@ -155,9 +160,9 @@ public final class MetroCommand {
             info.mudbourn.mmsmetro.station.StationIndex.lineIds(source.getWorld()), builder);
     }
 
-    private static int circulate(ServerCommandSource source, String line) {
+    private static int circulate(ServerCommandSource source, String line, int wanted) {
         int count = MmsMetro.config().carsPerTrain;
-        int trains = ConsistManager.circulate(source, line, count, MmsMetro.config());
+        int trains = ConsistManager.circulate(source, line, wanted, count, MmsMetro.config());
         if (trains == 0) {
             source.sendError(Text.literal("No loaded terminal station with a stop ahead found for line '" + line + "'."));
         }
