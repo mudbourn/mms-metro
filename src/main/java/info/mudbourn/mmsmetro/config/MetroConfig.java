@@ -33,10 +33,13 @@ public final class MetroConfig {
     // Gap in blocks a train keeps behind the train ahead when held.
     public double headway = 12.0;
 
+    // Target seconds between trains in each direction when circulate sizes a line's fleet.
+    public double circulateGapSeconds = 90.0;
+
     // Every settable key, for command autocomplete and validation.
     public static final java.util.List<String> KEYS = java.util.List.of(
         "maxSpeed", "acceleration", "carSpacing", "carsPerTrain",
-        "dwellTicks", "headway");
+        "dwellTicks", "headway", "circulateGapSeconds");
 
     // Applies a value to a named field and saves, returning false for an unknown key or a bad value.
     public boolean set(String key, String value) {
@@ -48,6 +51,7 @@ public final class MetroConfig {
                 case "carsPerTrain" -> this.carsPerTrain = Integer.parseInt(value);
                 case "dwellTicks" -> this.dwellTicks = Integer.parseInt(value);
                 case "headway" -> this.headway = Double.parseDouble(value);
+                case "circulateGapSeconds" -> this.circulateGapSeconds = Double.parseDouble(value);
                 default -> {
                     return false;
                 }
@@ -66,7 +70,8 @@ public final class MetroConfig {
             + ", carSpacing=" + carSpacing
             + ", carsPerTrain=" + carsPerTrain
             + ", dwellTicks=" + dwellTicks
-            + ", headway=" + headway;
+            + ", headway=" + headway
+            + ", circulateGapSeconds=" + circulateGapSeconds;
     }
 
     public static MetroConfig load() {

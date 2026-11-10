@@ -32,7 +32,6 @@ import net.minecraft.world.World;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -136,7 +135,7 @@ public final class ConsistManager {
             if (!(world.getBlockEntity(terminal) instanceof StationBlockEntity station)) {
                 continue;
             }
-            Circulation.Launcher launcher = launcherAt(state, world, terminal, station, lineId, cars, config);
+            Circulation.Launcher launcher = launcherAt(state, world, terminal, station, cars, config);
             if (launcher != null) {
                 launchers.add(launcher);
                 if (!station.getLineName().isEmpty()) {
@@ -168,9 +167,9 @@ public final class ConsistManager {
         return ends[0].equals(ends[1]) ? List.of(ends[0]) : List.of(ends[0], ends[1]);
     }
 
-    // A terminal's launcher: the path toward its Next Station, trains starting with the tail at the terminal, one train for each other station up to the far terminus.
+    // A terminal's launcher: the path toward its Next Station, trains starting with the tail at the terminal, enough trains to leave a circulateGapSeconds gap over the run to the far terminus.
     private static Circulation.Launcher launcherAt(MetroState state, ServerWorld world, BlockPos terminal,
-            StationBlockEntity station, String lineId, int cars, MetroConfig config) {
+            StationBlockEntity station, int cars, MetroConfig config) {
         BlockPos rail = railNearStation(world, terminal);
         if (rail == null) {
             return null;
@@ -188,20 +187,9 @@ public final class ConsistManager {
         if (Double.isNaN(firstStop)) {
             return null;
         }
-        List<PathStation> ahead = new ArrayList<>(path.stations());
-        ahead.sort(Comparator.comparingDouble(PathStation::arc));
-        String own = stationKey(station.getStationName());
-        Set<String> stops = new HashSet<>();
-        for (PathStation stop : ahead) {
-            String name = stationKey(stop.name());
-            if (lineId(stop.line()).equalsIgnoreCase(lineId) && !name.equals(own)) {
-                stops.add(name);
-                if (stop.terminus()) {
-                    break;
-                }
-            }
-        }
-        return new Circulation.Launcher(path, headArc, firstStop, Math.max(1, stops.size()));
+        double gapTicks = Math.max(1.0, config.circulateGapSeconds) * 20.0;
+        int trains = (int) Math.ceil(Consist.oneWayTicks(path, headArc, config) / gapTicks);
+        return new Circulation.Launcher(path, headArc, firstStop, Math.max(1, trains));
     }
 
     // The two ends of a line: the start terminal and the opposite terminal.
