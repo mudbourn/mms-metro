@@ -15,20 +15,22 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 
-// One running circulate: each terminal launches its trains one wave at a time, the next leaving once the last is SPACING_STOPS stops out.
+// One running circulate: each terminal launches its trains one at a time on an even interval, so both ends' trains interleave once they turn around.
 final class Circulation {
 
-    // Stops a train must get away from its terminal before the next one leaves, which also sets one train per this many stops.
+    // Stops per train when sizing a terminal's share of the fleet.
     static final int SPACING_STOPS = 2;
 
-    // One terminal's share of the circulation: the path it launches on, where trains start, the arc that releases the next train, the terminal and its neighbouring stop, and the train it is waiting on.
+    // One terminal's share of the circulation: the path it launches on, where trains start, the ticks between its launches, the terminal and its neighbouring stop, and the train it is waiting on.
     static final class Launcher {
 
         private final RailPath path;
 
         private final double headArc;
 
-        private final double triggerArc;
+        private final double intervalTicks;
+
+        private double nextDue;
 
         private final String terminalKey;
 
@@ -42,10 +44,10 @@ final class Circulation {
 
         private int waitingNumber;
 
-        Launcher(RailPath path, double headArc, double triggerArc, String terminal, String neighbour, int trains) {
+        Launcher(RailPath path, double headArc, double intervalTicks, String terminal, String neighbour, int trains) {
             this.path = path;
             this.headArc = headArc;
-            this.triggerArc = triggerArc;
+            this.intervalTicks = intervalTicks;
             this.terminalKey = key(terminal);
             this.neighbourKey = key(neighbour);
             this.remaining = trains;
@@ -67,6 +69,9 @@ final class Circulation {
     private int spawned;
 
     private int done;
+
+    // Ticks since the circulation started.
+    private long ticks;
 
     Circulation(ServerWorld world, String lineName, ServerCommandSource source, List<Launcher> launchers, int cars) {
         this.world = world;
@@ -90,7 +95,7 @@ final class Circulation {
         return this.total;
     }
 
-    // True once every train has been placed and has got SPACING_STOPS stops out or left the circulation.
+    // True once every train has been placed and its interval has run out.
     boolean finished() {
         for (Launcher launcher : this.launchers) {
             if (launcher.remaining > 0 || launcher.waiting != null) {
@@ -100,19 +105,19 @@ final class Circulation {
         return true;
     }
 
-    // Checks each terminal's waiting train and launches the next wave from any terminal that is free.
+    // Releases each terminal's last train once its interval has passed and launches the next from any terminal that is free.
     void tick(MetroState state, MetroConfig config) {
+        this.ticks++;
         for (Launcher launcher : this.launchers) {
             if (launcher.waiting != null) {
-                Consist train = state.train(launcher.waiting);
-                boolean onPath = train != null && train.path() == launcher.path;
-                if (onPath && train.headArc() + 1.0e-3 < launcher.triggerArc) {
+                if (this.ticks < launcher.nextDue) {
                     continue;
                 }
+                Consist train = state.train(launcher.waiting);
                 launcher.waiting = null;
                 this.done++;
                 if (train != null) {
-                    tell("Train " + launcher.waitingNumber + " is " + SPACING_STOPS + " stops out, continuing.");
+                    tell("Train " + launcher.waitingNumber + " is on its way, continuing.");
                 }
                 report();
             }
@@ -141,6 +146,7 @@ final class Circulation {
         this.spawned++;
         launcher.waiting = consist.id();
         launcher.waitingNumber = this.spawned;
+        launcher.nextDue = this.ticks + launcher.intervalTicks;
         report();
     }
 

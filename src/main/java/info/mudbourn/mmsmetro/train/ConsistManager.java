@@ -179,7 +179,7 @@ public final class ConsistManager {
         return ends[0].equals(ends[1]) ? List.of(ends[0]) : List.of(ends[0], ends[1]);
     }
 
-    // A terminal's launcher: the path toward its Next Station, trains starting with the tail at the terminal, one train for every SPACING_STOPS stops up to the far terminus.
+    // A terminal's launcher: the path toward its Next Station, trains starting with the tail at the terminal, one train for every SPACING_STOPS stops up to the far terminus, launched evenly over the run there.
     private static Circulation.Launcher launcherAt(MetroState state, ServerWorld world, BlockPos terminal,
             StationBlockEntity station, int cars, MetroConfig config) {
         BlockPos rail = railNearStation(world, terminal);
@@ -199,9 +199,9 @@ public final class ConsistManager {
         if (stops.isEmpty()) {
             return null;
         }
-        double trigger = stops.get(Math.min(Circulation.SPACING_STOPS, stops.size()) - 1).arc();
         int trains = (stops.size() + Circulation.SPACING_STOPS - 1) / Circulation.SPACING_STOPS;
-        return new Circulation.Launcher(path, headArc, trigger, station.getStationName(), stops.get(0).name(), trains);
+        double interval = Consist.oneWayTicks(path, headArc, config) / trains;
+        return new Circulation.Launcher(path, headArc, interval, station.getStationName(), stops.get(0).name(), trains);
     }
 
     // The two ends of a line: the start terminal and the opposite terminal.
