@@ -16,6 +16,8 @@ import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.text.ClickEvent;
+import net.minecraft.text.HoverEvent;
 import net.minecraft.text.Text;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
@@ -66,7 +68,9 @@ public final class MetroCommand {
                     .executes(context -> rebake(context.getSource(),
                         StringArgumentType.getString(context, "line")))))
             .then(CommandManager.literal("list")
-                .executes(context -> list(context.getSource())))
+                .executes(context -> list(context.getSource(), false))
+                .then(CommandManager.literal("stuck")
+                    .executes(context -> list(context.getSource(), true))))
             .then(CommandManager.literal("config")
                 .executes(context -> showConfig(context.getSource()))
                 .then(CommandManager.argument("key", StringArgumentType.word())
@@ -184,16 +188,28 @@ public final class MetroCommand {
         return marked;
     }
 
-    private static int list(ServerCommandSource source) {
-        java.util.List<String> lines = ConsistManager.describeTrains(source.getWorld());
-        if (lines.isEmpty()) {
-            source.sendFeedback(() -> Text.literal("No trains."), false);
-            return 0;
+    // Seconds a train must stand held before list stuck shows it.
+    private static final int STUCK_SECONDS = 30;
+
+    // Lists the trains, or only those held for STUCK_SECONDS or more, each line clickable to teleport to the lead car.
+    private static int list(ServerCommandSource source, boolean stuckOnly) {
+        int shown = 0;
+        for (Consist consist : ConsistManager.trains(source.getWorld())) {
+            if (stuckOnly && consist.stuckSeconds() < STUCK_SECONDS) {
+                continue;
+            }
+            BlockPos at = consist.headBlock();
+            String tp = "/tp @s " + at.getX() + " " + (at.getY() + 1) + " " + at.getZ();
+            Text line = Text.literal(consist.describe()).styled(style -> style
+                .withClickEvent(new ClickEvent.RunCommand(tp))
+                .withHoverEvent(new HoverEvent.ShowText(Text.literal("Teleport to " + at.toShortString()))));
+            source.sendFeedback(() -> line, false);
+            shown++;
         }
-        for (String line : lines) {
-            source.sendFeedback(() -> Text.literal(line), false);
+        if (shown == 0) {
+            source.sendFeedback(() -> Text.literal(stuckOnly ? "No stuck trains." : "No trains."), false);
         }
-        return lines.size();
+        return shown;
     }
 
     private static int showConfig(ServerCommandSource source) {

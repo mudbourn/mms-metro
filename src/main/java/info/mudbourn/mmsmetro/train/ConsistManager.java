@@ -382,15 +382,6 @@ public final class ConsistManager {
         return marked;
     }
 
-    // One summary line per train for the list command.
-    public static List<String> describeTrains(ServerWorld world) {
-        List<String> lines = new ArrayList<>();
-        for (Consist consist : MetroState.of(world).trains()) {
-            lines.add(consist.describe());
-        }
-        return lines;
-    }
-
     // Removes every view before the server stops, leaving non-player riders in the world.
     private static void despawnAllViews(MinecraftServer server) {
         for (ServerWorld world : server.getWorlds()) {

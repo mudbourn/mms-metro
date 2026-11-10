@@ -71,6 +71,15 @@ public final class Consist {
     // Chunk radius the car entity type is tracked within, matching its registered max tracking range.
     private static final int TRACKING_CHUNKS = 10;
 
+    // Why the train is standing still this tick, or empty when it is moving or dwelling normally.
+    private String waitReason = "";
+
+    // True while a dwell has been extended because the track ahead is occupied.
+    private boolean heldAtPlatform;
+
+    // Consecutive ticks the train has stood waiting for the same kind of hold.
+    private int stuckTicks;
+
     // Ticks left before a scheduled redraw fires, or zero when none is due.
     private int redrawIn;
 
@@ -257,25 +266,43 @@ public final class Consist {
         return live;
     }
 
-    String describe() {
+    public String describe() {
         return this.id.toString().substring(0, 8)
             + " line=" + (this.currentLine.isEmpty() ? "-" : this.currentLine)
             + " cars=" + liveViews() + "/" + this.carCount
             + " at " + BlockPos.ofFloored(this.path.sample(this.headArc).pos()).toShortString()
             + " " + this.phase.name().toLowerCase()
             + " arc=" + Math.round(this.headArc) + "/" + Math.round(this.path.length())
-            + (this.lost ? " LOST (track removed under the train)" : "");
+            + (this.lost ? " LOST (track removed under the train)" : "")
+            + (stuckSeconds() > 0 ? " waiting " + stuckSeconds() + "s (" + this.waitReason + ")" : "");
     }
 
     public void tick() {
         if (this.lost || this.path.length() <= 0.0) {
             return;
         }
+        this.waitReason = "";
         if (this.phase == Phase.DWELLING) {
             tickDwell();
         } else {
             tickRunning();
         }
+        this.stuckTicks = this.waitReason.isEmpty() ? 0 : this.stuckTicks + 1;
+    }
+
+    // Seconds the train has stood held by another train or a junction, 0 when it is not held.
+    public int stuckSeconds() {
+        return this.stuckTicks / 20;
+    }
+
+    // What is holding the train, or empty when nothing is.
+    public String waitReason() {
+        return this.waitReason;
+    }
+
+    // The block the lead car stands in.
+    public BlockPos headBlock() {
+        return BlockPos.ofFloored(this.path.sample(this.headArc).pos());
     }
 
     // Marks the train stopped because its track no longer exists.
@@ -319,6 +346,7 @@ public final class Consist {
         if (this.bufferHold > 0) {
             this.bufferHold--;
             this.speed = 0.0;
+            this.waitReason = "behind a train";
             return;
         }
 
@@ -369,11 +397,14 @@ public final class Consist {
             this.headArc = targetArc;
             this.speed = 0.0;
             if (blockedByTrain) {
+                this.waitReason = "behind a train";
                 if (this.bufferHold <= 0) {
                     playFromLead(ModSounds.BUFFER_WAIT, 0.8f);
                 }
                 this.bufferHold = BUFFER_HOLD_TICKS;
-            } else if (!yieldingJunction) {
+            } else if (yieldingJunction) {
+                this.waitReason = "yielding at a junction";
+            } else {
                 if (target != null) {
                     arriveAt(target);
                 } else {
@@ -531,15 +562,21 @@ public final class Consist {
 
         if (this.dwellTimer > 0) {
             this.dwellTimer--;
+            if (this.heldAtPlatform) {
+                this.waitReason = "held at the platform by a train ahead";
+            }
             return;
         }
 
         if (!Double.isInfinite(blockingTrainHoldArc())) {
+            this.heldAtPlatform = true;
+            this.waitReason = "held at the platform by a train ahead";
             this.dwellTimer = this.currentDwellTicks;
             playFromLead(ModSounds.BUFFER_WAIT, 0.8f);
             return;
         }
 
+        this.heldAtPlatform = false;
         playFromLead(ModSounds.DEPARTURE, 1.0f);
         applyDepartureDirection(nextStation());
         this.departing = true;
