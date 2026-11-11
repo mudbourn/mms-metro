@@ -120,6 +120,9 @@ public final class Consist {
 
     private int bufferHold;
 
+    // The train found blocking the track ahead by the last headway check, or null when the line was clear.
+    private Consist blocker;
+
     private String currentLine = "";
 
     private String currentDirection = "";
@@ -433,6 +436,7 @@ public final class Consist {
         Vec3d head = leadPos();
 
         double nearestBlockerArc = Double.POSITIVE_INFINITY;
+        this.blocker = null;
         for (Consist other : this.state.trains()) {
             if (other == this) {
                 continue;
@@ -449,6 +453,7 @@ public final class Consist {
                 for (double arc : this.path.arcsOnTrack(BlockPos.ofFloored(pos))) {
                     if (arc > this.headArc + 0.5 && arc <= scanEnd && arc < nearestBlockerArc) {
                         nearestBlockerArc = arc;
+                        this.blocker = other;
                     }
                 }
             }
@@ -669,12 +674,23 @@ public final class Consist {
         return Math.max(0.0, arc);
     }
 
+    // Block of the train this one stands stalled behind, as "x, y, z", or empty when it is not stalled.
+    private String stallText() {
+        boolean stalled = this.bufferHold > 0 || (this.heldAtPlatform && this.phase == Phase.DWELLING);
+        if (!stalled || this.blocker == null) {
+            return "";
+        }
+        BlockPos pos = this.blocker.headBlock();
+        return pos.getX() + ", " + pos.getY() + ", " + pos.getZ();
+    }
+
     // Makes each car entity exist exactly where its chunk has entities loaded, and seats it on the path.
     public void syncViews() {
         PathStation next = nextStation();
         String nextName = next != null ? next.name() : "";
         boolean waiting = this.phase == Phase.DWELLING;
         boolean arriving = this.approachBraking && this.phase == Phase.RUNNING;
+        String stall = stallText();
         for (int i = 0; i < this.carCount; i++) {
             double arc = carArc(i);
             PathPoint point = this.path.sample(arc);
@@ -708,6 +724,7 @@ public final class Consist {
             car.setCarCount(this.carCount);
             car.setHudInfo(this.currentLine, this.currentDirection, nextName, waiting, this.currentLineColor, arriving);
             car.setHudAnnouncement(this.announcement);
+            car.setHudStall(stall);
             for (Entity passenger : car.getPassengerList()) {
                 car.updatePassengerPosition(passenger);
             }

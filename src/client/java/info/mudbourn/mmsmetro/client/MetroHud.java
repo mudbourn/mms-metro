@@ -37,6 +37,7 @@ public final class MetroHud {
         boolean waiting = car.isHudWaiting();
         boolean arriving = car.isHudArriving();
         int lineColor = car.getHudLineColor();
+        String stall = car.getHudStall();
 
         // Build the lines from the top down; skip anything the station left blank.
         java.util.List<Line> rows = new java.util.ArrayList<>();
@@ -47,8 +48,14 @@ public final class MetroHud {
             rows.add(new Line(direction, WHITE, false));
         }
         String nextLabel = waiting ? "Now at" : (arriving ? "Arriving at" : "Next stop");
-        rows.add(new Line(nextLabel + ": " + (next.isEmpty() ? "*" : next), LABEL, false));
-        if (!announcement.isEmpty()) {
+        if (!stall.isEmpty()) {
+            rows.add(new Line("Stopped: Stalling for train buffer", LABEL, false));
+            rows.add(new Line("A potential collision has been prevented.", WHITE, false));
+            rows.add(new Line("Please wait for the train at " + stall + " to depart.", WHITE, false));
+        } else {
+            rows.add(new Line(nextLabel + ": " + (next.isEmpty() ? "*" : next), LABEL, false));
+        }
+        if (stall.isEmpty() && !announcement.isEmpty()) {
             rows.add(new Line(announcement, WHITE, false));
         }
 

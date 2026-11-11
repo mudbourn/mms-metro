@@ -59,6 +59,10 @@ public class MetroCarEntity extends Entity {
     private static final TrackedData<Integer> HUD_LINE_COLOR =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.INTEGER);
 
+    // Block of the train this one is stalled behind, as "x, y, z", or empty when it is not stalled.
+    private static final TrackedData<String> HUD_STALL =
+        DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.STRING);
+
     // True while the train is braking into a station.
     private static final TrackedData<Boolean> HUD_ARRIVING =
         DataTracker.registerData(MetroCarEntity.class, TrackedDataHandlerRegistry.BOOLEAN);
@@ -123,6 +127,7 @@ public class MetroCarEntity extends Entity {
         builder.add(HUD_WAITING, false);
         builder.add(HUD_LINE_COLOR, 0xFFF5A623);
         builder.add(HUD_ARRIVING, false);
+        builder.add(HUD_STALL, "");
         builder.add(CONSIST_ID, "");
         builder.add(POS_X, 0.0f);
         builder.add(POS_Y, 0.0f);
@@ -218,6 +223,16 @@ public class MetroCarEntity extends Entity {
     public void setHudAnnouncement(String announcement) {
         if (!this.dataTracker.get(HUD_ANNOUNCEMENT).equals(announcement)) {
             this.dataTracker.set(HUD_ANNOUNCEMENT, announcement);
+        }
+    }
+
+    public String getHudStall() {
+        return this.dataTracker.get(HUD_STALL);
+    }
+
+    public void setHudStall(String stall) {
+        if (!this.dataTracker.get(HUD_STALL).equals(stall)) {
+            this.dataTracker.set(HUD_STALL, stall);
         }
     }
 
