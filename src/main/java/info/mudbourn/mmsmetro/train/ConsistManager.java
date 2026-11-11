@@ -61,6 +61,7 @@ public final class ConsistManager {
         ServerTickEvents.END_SERVER_TICK.register(ConsistManager::watchTeleports);
         AttackEntityCallback.EVENT.register(ConsistManager::onAttack);
         ServerEntityEvents.ENTITY_LOAD.register(LegacyCars::onLoad);
+        ServerLifecycleEvents.SERVER_STARTED.register(MetroState::migrateStrays);
         ServerLifecycleEvents.SERVER_STOPPING.register(ConsistManager::despawnAllViews);
         ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
             LegacyCars.clear();

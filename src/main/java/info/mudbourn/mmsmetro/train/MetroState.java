@@ -16,11 +16,14 @@ import net.minecraft.block.BlockState;
 import net.minecraft.datafixer.DataFixTypes;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtList;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.PersistentState;
 import net.minecraft.world.PersistentStateType;
+import net.minecraft.world.World;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -40,12 +43,8 @@ public final class MetroState extends PersistentState {
 
     private static final Codec<MetroState> CODEC = NbtCompound.CODEC.xmap(MetroState::fromNbt, MetroState::toNbt);
 
-    private static final PersistentStateType<MetroState> TYPE = new PersistentStateType<>(
-        "mms_metro_trains",
-        MetroState::new,
-        CODEC,
-        DataFixTypes.SAVED_DATA_COMMAND_STORAGE
-    );
+    // Saved state types per dimension, since every dimension shares the overworld's state manager.
+    private static final Map<RegistryKey<World>, PersistentStateType<MetroState>> TYPES = new HashMap<>();
 
     // Most paths baked by one request, so a pathological network cannot bake forever.
     private static final int BAKE_LIMIT = 32;
@@ -68,18 +67,28 @@ public final class MetroState extends PersistentState {
 
     // The world's state, bound to the world so its trains can read it.
     public static MetroState of(ServerWorld world) {
-        MetroState state = world.getPersistentStateManager().getOrCreate(TYPE);
+        MetroState state = world.getPersistentStateManager().getOrCreate(type(world));
         state.bind(world);
         return state;
     }
 
     // The world's state if one exists already, else null.
     static MetroState peek(ServerWorld world) {
-        MetroState state = world.getPersistentStateManager().get(TYPE);
+        MetroState state = world.getPersistentStateManager().get(type(world));
         if (state != null) {
             state.bind(world);
         }
         return state;
+    }
+
+    // The state type of a world's dimension, keeping the original id for the overworld.
+    private static PersistentStateType<MetroState> type(ServerWorld world) {
+        return TYPES.computeIfAbsent(world.getRegistryKey(), key -> new PersistentStateType<>(
+            key == World.OVERWORLD ? "mms_metro_trains" : "mms_metro_trains_" + key.getValue().toUnderscoreSeparatedString(),
+            MetroState::new,
+            CODEC,
+            DataFixTypes.SAVED_DATA_COMMAND_STORAGE
+        ));
     }
 
     private void bind(ServerWorld bound) {
@@ -90,6 +99,36 @@ public final class MetroState extends PersistentState {
         for (Consist train : this.trains.values()) {
             train.attach(bound, this);
         }
+    }
+
+    // Moves each train of the overworld file whose origin rail is absent there but present in exactly one other dimension into that dimension.
+    static void migrateStrays(MinecraftServer server) {
+        ServerWorld overworld = server.getOverworld();
+        MetroState home = of(overworld);
+        for (Consist train : new ArrayList<>(home.trains.values())) {
+            BlockPos origin = train.path().key().origin();
+            if (AbstractRailBlock.isRail(overworld, origin)) {
+                continue;
+            }
+            List<ServerWorld> owners = new ArrayList<>();
+            for (ServerWorld world : server.getWorlds()) {
+                if (world != overworld && AbstractRailBlock.isRail(world, origin)) {
+                    owners.add(world);
+                }
+            }
+            if (owners.size() != 1) {
+                continue;
+            }
+            ServerWorld target = owners.get(0);
+            home.trains.remove(train.id());
+            train.discardViews();
+            MetroState destination = of(target);
+            destination.paths.putIfAbsent(train.path().key(), train.path());
+            destination.addTrain(train);
+            MmsMetro.LOGGER.info("Moved train {} from the overworld file to {}", train.id(), target.getRegistryKey().getValue());
+        }
+        home.collectPaths();
+        home.markDirty();
     }
 
     public Collection<Consist> trains() {
