@@ -22,7 +22,7 @@ public class StationEditScreen extends Screen {
 
     private TextFieldWidget nameField;
     private TextFieldWidget lineField;
-    private TextFieldWidget directionField;
+    private String direction;
     private TextFieldWidget nextField;
     private TextFieldWidget exitField;
     private TextFieldWidget transferField;
@@ -55,14 +55,15 @@ public class StationEditScreen extends Screen {
 
         this.nameField = labeledField(leftX, top, "Station name", this.data.name(), 64, "e.g. Central");
         this.lineField = labeledField(leftX, top + ROW_SPACING, "Line", this.data.line(), 64, "e.g. Red Line");
-        this.directionField = labeledField(leftX, top + ROW_SPACING * 2, "Direction", this.data.direction(), 64, "e.g. NORTHBOUND");
-        // Force the direction label to all-caps as it is typed, matching how the server stores it.
-        this.directionField.setChangedListener(text -> {
-            String upper = text.toUpperCase(java.util.Locale.ROOT);
-            if (!upper.equals(text)) {
-                this.directionField.setText(upper);
-            }
-        });
+        this.direction = this.data.direction().toUpperCase(java.util.Locale.ROOT);
+        this.addDrawableChild(new TextWidget(leftX, top + ROW_SPACING * 2 - 10, FIELD_WIDTH, 9,
+            Text.literal("Direction"), this.textRenderer));
+        this.addDrawableChild(CyclingButtonWidget.builder(
+                (String d) -> Text.literal(d.isEmpty() ? "Compass heading" : d), this.direction)
+            .values(directionOptions(this.direction))
+            .omitKeyText()
+            .build(leftX, top + ROW_SPACING * 2, FIELD_WIDTH, FIELD_HEIGHT, Text.literal("Direction"),
+                (button, value) -> this.direction = value));
         this.nextField = labeledField(leftX, top + ROW_SPACING * 3, "Next stop", this.data.next(), 64, "next station name");
 
         this.exitField = labeledField(rightX, top, "Exit side (left/right/both)", this.data.exit(), 32, "left / right / both");
@@ -97,6 +98,20 @@ public class StationEditScreen extends Screen {
             .dimensions(this.width / 2 - 154, bottom, 150, 20).build());
         this.addDrawableChild(ButtonWidget.builder(Text.literal("Cancel"), b -> this.close())
             .dimensions(this.width / 2 + 4, bottom, 150, 20).build());
+    }
+
+    // Blank for the compass heading, the four bounds, and the stored label when it is none of them.
+    private static java.util.List<String> directionOptions(String current) {
+        java.util.List<String> options = new java.util.ArrayList<>(java.util.List.of(
+            "",
+            "NORTHBOUND",
+            "EASTBOUND",
+            "SOUTHBOUND",
+            "WESTBOUND"));
+        if (!options.contains(current)) {
+            options.add(current);
+        }
+        return options;
     }
 
     private TextFieldWidget labeledField(int x, int y, String label, String value, int maxLength, String placeholder) {
@@ -141,7 +156,7 @@ public class StationEditScreen extends Screen {
             dwell = this.data.dwell();
         }
         ClientPlayNetworking.send(new MetroNetworking.StationEdit(this.data.pos(),
-            this.nameField.getText(), this.lineField.getText(), this.lineColor.getId(), this.directionField.getText(),
+            this.nameField.getText(), this.lineField.getText(), this.lineColor.getId(), this.direction,
             this.nextField.getText(), this.exitField.getText(), this.transferField.getText(),
             this.hub, this.terminus, dwell));
         this.close();

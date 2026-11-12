@@ -1,14 +1,15 @@
 package info.mudbourn.mmsmetro.client.screen;
 
 import info.mudbourn.mmsmetro.network.MetroNetworking;
+import java.util.List;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.gui.widget.TextFieldWidget;
+import net.minecraft.client.gui.widget.CyclingButtonWidget;
 import net.minecraft.client.gui.widget.TextWidget;
 import net.minecraft.text.Text;
 
-// The junction editor: one exit direction per heading a train may arrive on, so arrivals and departures through the same block are routed onto separate tracks; a blank field falls back to the greedy rail follow.
+// The junction editor: one exit button per heading a train may arrive on, cycling the track follow and the three forward exits.
 public class JunctionEditScreen extends Screen {
 
     private static final int FIELD_WIDTH = 260;
@@ -16,14 +17,18 @@ public class JunctionEditScreen extends Screen {
     private static final int ROW_GAP = 42;
 
     private final MetroNetworking.OpenJunctionScreen data;
-    private TextFieldWidget northField;
-    private TextFieldWidget southField;
-    private TextFieldWidget eastField;
-    private TextFieldWidget westField;
+    private String north;
+    private String south;
+    private String east;
+    private String west;
 
     public JunctionEditScreen(MetroNetworking.OpenJunctionScreen data) {
         super(Text.literal("Edit Junction"));
         this.data = data;
+        this.north = normalise(data.north());
+        this.south = normalise(data.south());
+        this.east = normalise(data.east());
+        this.west = normalise(data.west());
     }
 
     @Override
@@ -31,10 +36,14 @@ public class JunctionEditScreen extends Screen {
         int left = this.width / 2 - FIELD_WIDTH / 2;
         int top = this.height / 2 - 96;
 
-        this.northField = row(left, top, "Train heading NORTH (in from the south) exits:", this.data.north());
-        this.eastField = row(left, top + ROW_GAP, "Train heading EAST (in from the west) exits:", this.data.east());
-        this.southField = row(left, top + ROW_GAP * 2, "Train heading SOUTH (in from the north) exits:", this.data.south());
-        this.westField = row(left, top + ROW_GAP * 3, "Train heading WEST (in from the east) exits:", this.data.west());
+        row(left, top, "Train heading NORTH (in from the south) exits:", this.north,
+            List.of("", "NORTH", "EAST", "WEST"), v -> this.north = v);
+        row(left, top + ROW_GAP, "Train heading EAST (in from the west) exits:", this.east,
+            List.of("", "EAST", "NORTH", "SOUTH"), v -> this.east = v);
+        row(left, top + ROW_GAP * 2, "Train heading SOUTH (in from the north) exits:", this.south,
+            List.of("", "SOUTH", "EAST", "WEST"), v -> this.south = v);
+        row(left, top + ROW_GAP * 3, "Train heading WEST (in from the east) exits:", this.west,
+            List.of("", "WEST", "NORTH", "SOUTH"), v -> this.west = v);
 
         int buttons = top + ROW_GAP * 4;
         this.addDrawableChild(ButtonWidget.builder(Text.literal("Done"), b -> save())
@@ -43,38 +52,31 @@ public class JunctionEditScreen extends Screen {
             .dimensions(left + FIELD_WIDTH / 2 + 2, buttons, FIELD_WIDTH / 2 - 2, 20).build());
     }
 
-    // Builds one row: a caption widget naming the approach, above an exit field seeded with its current value; both are real widgets so they render through the same pipeline as every other control.
-    private TextFieldWidget row(int left, int top, String caption, String value) {
-        TextWidget label = new TextWidget(left, top, FIELD_WIDTH, 9, Text.literal(caption), this.textRenderer);
-        this.addDrawableChild(label);
-
-        TextFieldWidget field = new TextFieldWidget(this.textRenderer, left, top + 11,
-            FIELD_WIDTH, FIELD_HEIGHT, Text.empty());
-        field.setMaxLength(16);
-        field.setPlaceholder(Text.literal("blank = follow the track"));
-        field.setTextPredicate(JunctionEditScreen::isCapitalsOnly);
-        field.setText(value.toUpperCase());
-        this.addDrawableChild(field);
-        return field;
+    // Builds one row: a caption above an exit button cycling the given options.
+    private void row(int left, int top, String caption, String value, List<String> options,
+                     java.util.function.Consumer<String> setter) {
+        this.addDrawableChild(new TextWidget(left, top, FIELD_WIDTH, 9, Text.literal(caption), this.textRenderer));
+        String initial = options.contains(value) ? value : "";
+        setter.accept(initial);
+        this.addDrawableChild(CyclingButtonWidget.builder(
+                (String d) -> Text.literal(d.isEmpty() ? "Follow the track" : d), initial)
+            .values(options)
+            .omitKeyText()
+            .build(left, top + 11, FIELD_WIDTH, FIELD_HEIGHT, Text.literal(caption),
+                (button, v) -> setter.accept(v)));
     }
 
-    // True when a string is empty or made only of capital letters, so the fields reject lower case as it is typed.
-    private static boolean isCapitalsOnly(String text) {
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if (c < 'A' || c > 'Z') {
-                return false;
-            }
-        }
-        return true;
+    // Upper-cases a stored exit name.
+    private static String normalise(String value) {
+        return value.trim().toUpperCase(java.util.Locale.ROOT);
     }
 
     private void save() {
         ClientPlayNetworking.send(new MetroNetworking.JunctionEdit(this.data.pos(),
-            this.northField.getText(),
-            this.southField.getText(),
-            this.eastField.getText(),
-            this.westField.getText()));
+            this.north,
+            this.south,
+            this.east,
+            this.west));
         this.close();
     }
 

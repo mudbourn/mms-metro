@@ -5,7 +5,6 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.CyclingButtonWidget;
-import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.client.gui.widget.TextWidget;
 import net.minecraft.text.Text;
 
@@ -22,7 +21,7 @@ public class BumpEditScreen extends Screen {
     private static final String NONE = "(none)";
 
     private final MetroNetworking.OpenBumpScreen data;
-    private TextFieldWidget directionField;
+    private String direction;
     private String stationKey;
 
     public BumpEditScreen(MetroNetworking.OpenBumpScreen data) {
@@ -42,12 +41,12 @@ public class BumpEditScreen extends Screen {
         this.addDrawableChild(new TextWidget(cx - FIELD_WIDTH / 2, top - 10, FIELD_WIDTH, 9,
             Text.literal("Direction"), this.textRenderer));
 
-        this.directionField = new TextFieldWidget(this.textRenderer, cx - FIELD_WIDTH / 2, top,
-            FIELD_WIDTH, FIELD_HEIGHT, Text.empty());
-        this.directionField.setMaxLength(64);
-        this.directionField.setPlaceholder(Text.literal("e.g. Eastbound, or T_Northbound for a terminus"));
-        this.directionField.setText(this.data.direction());
-        this.addDrawableChild(this.directionField);
+        this.direction = this.data.direction();
+        this.addDrawableChild(CyclingButtonWidget.builder((String d) -> Text.literal(d.isEmpty() ? "Any" : d), this.direction)
+            .values(directionOptions(this.direction))
+            .omitKeyText()
+            .build(cx - FIELD_WIDTH / 2, top, FIELD_WIDTH, FIELD_HEIGHT, Text.literal("Direction"),
+                (button, value) -> this.direction = value));
 
         // Exact station tether: overrides direction matching, picked from the stops reachable from this bump.
         this.addDrawableChild(new TextWidget(cx - FIELD_WIDTH / 2, top + 26, FIELD_WIDTH, 9,
@@ -81,9 +80,27 @@ public class BumpEditScreen extends Screen {
         return options;
     }
 
+    // Blank for any, the four bounds, their terminus forms, and the stored value when it is none of them.
+    private static List<String> directionOptions(String current) {
+        List<String> options = new ArrayList<>(List.of(
+            "",
+            "Northbound",
+            "Eastbound",
+            "Southbound",
+            "Westbound",
+            "T_Northbound",
+            "T_Eastbound",
+            "T_Southbound",
+            "T_Westbound"));
+        if (!options.contains(current)) {
+            options.add(current);
+        }
+        return options;
+    }
+
     private void save() {
         ClientPlayNetworking.send(new MetroNetworking.BumpEdit(this.data.pos(),
-            this.directionField.getText(), this.stationKey));
+            this.direction, this.stationKey));
         this.close();
     }
 

@@ -136,16 +136,16 @@ local function upperSeconds(seconds)
   return math.max(step, math.ceil(seconds * CONFIG.etaPadding / step) * step)
 end
 
--- Live station settings and arrivals, or CONFIG and no arrivals without a station; arrivals are nil when the read failed
+-- Live station settings and arrivals, or nil when there is no station or the read failed
 local function readStation(station)
   if not station then
-    return CONFIG, nil
+    return nil, nil
   end
   local ok, info = pcall(station.getStation)
-  local okArr, arrivals = pcall(station.getArrivals)
-  if not ok then
-    return CONFIG, nil
+  if not ok or type(info) ~= "table" then
+    return nil, nil
   end
+  local okArr, arrivals = pcall(station.getArrivals)
   return {
     station = info.name,
     line = info.line,
@@ -274,7 +274,17 @@ local function monitors()
   return { peripheral.find("monitor") }
 end
 
--- Open every wireless modem for rednet, erroring when there is none
+-- Paint every monitor, returning a fresh monitor list when one has gone away
+local function paintAll(mons, paint)
+  for _, mon in ipairs(mons) do
+    if not pcall(paint, mon) then
+      return monitors()
+    end
+  end
+  return mons
+end
+
+-- Open every wireless modem for rednet and report whether any was found
 local function openWireless()
   local opened = false
   peripheral.find("modem", function(name, modem)
@@ -284,16 +294,16 @@ local function openWireless()
     end
     return false
   end)
-  if not opened then
-    error("No wireless or ender modem attached", 0)
-  end
+  return opened
 end
 
 -- Local or sender mode, reads a station and optionally broadcasts it
 local function runLocal(channel)
   local station = peripheral.find("metro_station")
   if channel then
-    openWireless()
+    if not openWireless() then
+      error("No wireless or ender modem attached", 0)
+    end
     if not station then
       error("Sender needs a station block attached", 0)
     end
@@ -303,23 +313,29 @@ local function runLocal(channel)
     error("No monitor attached", 0)
   end
   local info, arrivals = readStation(station)
-  local lastRead = os.clock()
+  info = info or CONFIG
+  local lastRead = -math.huge
   local timer = os.startTimer(CONFIG.frameSeconds)
   while true do
     if os.clock() - lastRead >= CONFIG.refreshSeconds then
-      local fresh
-      info, fresh = readStation(station)
-      if fresh or not station then
-        arrivals = fresh
+      local fresh, freshArrivals = readStation(station)
+      if not fresh then
+        station = peripheral.find("metro_station")
+        fresh, freshArrivals = readStation(station)
+      end
+      if fresh then
+        info, arrivals = fresh, freshArrivals
+        if channel then
+          pcall(rednet.broadcast, { channel = channel, info = info, arrivals = arrivals }, PROTOCOL)
+        end
+      elseif not station then
+        info, arrivals = CONFIG, nil
       end
       lastRead = os.clock()
-      if channel then
-        rednet.broadcast({ channel = channel, info = info, arrivals = arrivals }, PROTOCOL)
-      end
     end
-    for _, mon in ipairs(mons) do
+    mons = paintAll(mons, function(mon)
       draw(mon, info, arrivals, blinkOn())
-    end
+    end)
     scrollFrame = scrollFrame + 1
     repeat
       local event, id = os.pullEvent()
@@ -329,6 +345,9 @@ local function runLocal(channel)
       elseif event == "peripheral" or event == "peripheral_detach" or event == "monitor_resize" then
         mons = monitors()
         station = peripheral.find("metro_station")
+        if channel then
+          openWireless()
+        end
         redraw = true
       end
     until redraw
@@ -337,7 +356,9 @@ end
 
 -- Receiver mode, draws the latest broadcast for a channel
 local function runShow(channel)
-  openWireless()
+  if not openWireless() then
+    error("No wireless or ender modem attached", 0)
+  end
   local mons = monitors()
   if #mons == 0 then
     error("No monitor attached", 0)
@@ -347,13 +368,13 @@ local function runShow(channel)
   local timer = os.startTimer(CONFIG.frameSeconds)
   while true do
     local fresh = latest and os.clock() - lastHeard <= CONFIG.signalTimeoutSeconds
-    for _, mon in ipairs(mons) do
+    mons = paintAll(mons, function(mon)
       if fresh then
         draw(mon, latest.info, latest.arrivals, blinkOn())
       else
         drawNoSignal(mon, channel)
       end
-    end
+    end)
     scrollFrame = scrollFrame + 1
     repeat
       local event, a, b, c = os.pullEvent()
@@ -365,6 +386,7 @@ local function runShow(channel)
         lastHeard = os.clock()
       elseif event == "peripheral" or event == "peripheral_detach" or event == "monitor_resize" then
         mons = monitors()
+        openWireless()
         redraw = true
       end
     until redraw
